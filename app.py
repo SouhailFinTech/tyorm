@@ -65,6 +65,17 @@ def analyze_thumbnail(image_path):
         
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
+    # --- FIX: AUTO-CROP BLACK BARS ---
+    # Find pixels that aren't pure black (threshold 15)
+    _, thresh = cv2.threshold(gray, 15, 255, cv2.THRESH_BINARY)
+    non_zero = cv2.findNonZero(thresh)
+    if non_zero is not None:
+        x, y, w, h = cv2.boundingRect(non_zero)
+        # Crop the image to remove the black borders
+        img = img[y:y+h, x:x+w]
+        gray = gray[y:y+h, x:x+w]
+    # ----------------------------------
+
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     l_channel, _, _ = cv2.split(lab)
     contrast_score = float(np.std(l_channel))
@@ -156,9 +167,8 @@ def detect_boring_signals(video_path):
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps == 0: fps = 30
         
-        # Limit to first 30 seconds to prevent timeouts
         max_frames = int(fps * 30)
-        sample_rate = 3 # Check every 3rd frame for speed
+        sample_rate = 3 
         
         stagnant_count = 0
         total_comparisons = 0
@@ -172,14 +182,13 @@ def detect_boring_signals(video_path):
 
             if frame_count % sample_rate == 0:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                gray = cv2.resize(gray, (320, 180)) # Resize for CPU efficiency
+                gray = cv2.resize(gray, (320, 180)) 
 
                 if prev_frame is not None:
                     diff = cv2.absdiff(prev_frame, gray)
                     motion = np.mean(diff)
                     motion_scores.append(motion)
 
-                    # If motion is very low, it's a stagnant frame
                     if motion < 8.0: 
                         stagnant_count += 1
                     total_comparisons += 1
@@ -195,7 +204,6 @@ def detect_boring_signals(video_path):
         stagnation_rate = (stagnant_count / total_comparisons) * 100
         avg_motion = np.mean(motion_scores)
 
-        # Boring score calculation: High stagnation + low motion = high score (boring)
         motion_penalty = max(0, 15 - avg_motion) * 3 
         boring_score = int(min(100, (stagnation_rate * 0.5) + motion_penalty))
         is_boring = boring_score > 50
@@ -279,7 +287,6 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
         st.error("Please provide a YouTube URL, upload a video, or paste a transcript.")
     else:
         with st.spinner("Processing..."):
-            # Handle URL Data
             thumb_path = None
             transcript = ""
             if url_input:
@@ -287,7 +294,6 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                 if url_error:
                     st.error(url_error)
 
-            # Handle Uploaded Video
             video_path = None
             if uploaded_file is not None:
                 temp_dir = tempfile.gettempdir()
@@ -300,10 +306,10 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
         
         # THUMBNAIL
         with col1:
-            st.subheader("️ Thumbnail Analysis")
+            st.subheader("🖼️ Thumbnail Analysis")
             if thumb_path and os.path.exists(thumb_path):
                 st.image(thumb_path, use_column_width=True)
-                with st.spinner("Analyzing thumbnail..."):
+                with st.spinner("Analyzing thumbnail (auto-cropping black bars)..."):
                     thumb_metrics = analyze_thumbnail(thumb_path)
                     
                 if "error" in thumb_metrics:
@@ -322,15 +328,16 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                         st.warning("⚠️ Face detected, but not centered.")
                     elif thumb_metrics["faces"] > 0:
                         st.success("✅ Face composition is strong.")
+                    else:
+                        st.info("ℹ️ No face detected. (Normal for faceless channels)")
             else:
                 st.info("Provide a YouTube URL to analyze the thumbnail.")
 
         # HOOK
         with col2:
-            st.subheader(" Hook Analysis (First 30s)")
+            st.subheader("🎬 Hook Analysis (First 30s)")
             
             if video_path and os.path.exists(video_path):
-                # 1. Pacing Analysis
                 with st.spinner("Analyzing video pacing..."):
                     vid_metrics = analyze_hook_video(video_path)
                     
@@ -347,9 +354,8 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                     elif cpm < 20:
                         st.success("✅ **Excellent Pacing:** High energy while maintaining clarity")
                     else:
-                        st.warning("⚠️ **Very Fast:** Ensure viewers can follow the technical details")
+                        st.warning("️ **Very Fast:** Ensure viewers can follow the technical details")
 
-                # 2. BORING DETECTOR
                 with st.spinner("Detecting boring signals..."):
                     boring_metrics = detect_boring_signals(video_path)
                     
@@ -378,13 +384,12 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                         st.success(f"✅ **{boring_metrics['verdict']}**")
                         st.info("Your video maintains good visual interest throughout!")
 
-                # 3. LLM Script Analysis
                 final_transcript = manual_transcript if manual_transcript else transcript
                 
                 if "GROQ_API_KEY" not in st.secrets:
                     st.warning("⚠️ **Missing API Key:** Add your Groq API key to Streamlit Secrets.")
                 elif not final_transcript or final_transcript == "No transcript available.":
-                    st.warning("⚠️ **Missing Transcript:** Either paste the YouTube URL in Box 1 OR manually paste your script in Box 3.")
+                    st.warning("️ **Missing Transcript:** Either paste the YouTube URL in Box 1 OR manually paste your script in Box 3.")
                 else:
                     with st.spinner("Running AI script analysis..."):
                         llm_data = analyze_script_with_llm(final_transcript, cpm)
@@ -407,7 +412,6 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
             else:
                 st.info("Upload an MP4 file to analyze the video hook.")
 
-        # Cleanup
         for f in [thumb_path, video_path]:
             if f and os.path.exists(f):
                 try: os.remove(f)
