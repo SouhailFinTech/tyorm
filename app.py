@@ -10,23 +10,13 @@ from youtube_transcript_api import YouTubeTranscriptApi
 import re
 import urllib.request
 
-# --- PAGE CONFIG ---
 st.set_page_config(page_title="QuantTube Analyzer", page_icon="📈", layout="wide")
 
-# --- INITIALIZATION ---
 @st.cache_resource
-def load_ocr():
-    return RapidOCR()
+def load_face_cascade():
+    return cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-@st.cache_resource
-def load_mediapipe():
-    mp_face = mp.solutions.face_detection
-    return mp_face.FaceDetection(model_selection=1, min_detection_confidence=0.5)
-
-ocr_engine = load_ocr()
-mp_face_detection = load_mediapipe()
-
-# --- HELPER FUNCTIONS ---
+face_cascade = load_face_cascade()
 
 def extract_video_id(url):
     regex = r"(?:v=|\/)([0-9A-Za-z_-]{11}).*"
@@ -38,10 +28,8 @@ def fetch_video_data(url):
     if not video_id:
         return None, None, None, "Invalid YouTube URL"
 
-    # Use system temp directory to prevent Streamlit Cloud read-only errors
     temp_dir = tempfile.gettempdir()
 
-    # 1. Get Transcript
     transcript_text = ""
     try:
         transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
@@ -49,7 +37,6 @@ def fetch_video_data(url):
     except Exception:
         transcript_text = "No transcript available."
 
-    # 2. Download Thumbnail
     thumb_path = os.path.join(temp_dir, "temp_thumb.jpg")
     try:
         ydl_thumb_opts = {'quiet': True, 'skip_download': True}
@@ -61,7 +48,6 @@ def fetch_video_data(url):
     except Exception:
         thumb_path = None
 
-    # 3. Download Video (Lowest quality to save RAM/Bandwidth)
     video_path = os.path.join(temp_dir, "temp_video.mp4")
     try:
         ydl_vid_opts = {
@@ -81,53 +67,48 @@ def analyze_thumbnail(image_path):
         return {"error": "Could not load thumbnail"}
 
     img = cv2.imread(image_path)
+    if img is None:
+        return {"error": "Failed to decode image"}
+        
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 1. Contrast & Sharpness (OpenCV LAB)
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     l_channel, _, _ = cv2.split(lab)
     contrast_score = np.std(l_channel) 
-    sharpness_score = cv2.Laplacian(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+    sharpness_score = cv2.Laplacian(gray, cv2.CV_64F).var()
 
-    # 2. Face & Pose Detection (MediaPipe)
-    results = mp_face_detection.process(img_rgb)
-    face_count = 0
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    face_count = len(faces)
+    
     face_centered = False
-    if results.detections:
-        face_count = len(results.detections)
-        for detection in results.detections:
-            bboxC = detection.location_data.relative_bounding_box
-            face_center_x = bboxC.xmin + (bboxC.width / 2)
-            face_center_y = bboxC.ymin + (bboxC.height / 2)
-            if 0.2 < face_center_x < 0.8 and 0.2 < face_center_y < 0.8:
-                face_centered = True
+    if face_count > 0:
+        largest_face = max(faces, key=lambda f: f[2] * f[3])
+        x, y, w, h = largest_face
+        img_h, img_w = gray.shape
+        face_center_x = (x + w/2) / img_w
+        face_center_y = (y + h/2) / img_h
+        if 0.2 < face_center_x < 0.8 and 0.2 < face_center_y < 0.8:
+            face_centered = True
 
-    # 3. Text Ratio (RapidOCR)
-    text_word_count = 0
-    try:
-        result, _ = ocr_engine(image_path)
-        if result is not None:
-            for line in result:
-                text_word_count += len(line[1].split())
-    except Exception:
-        pass
+    b, g, r = cv2.split(img)
+    vibrancy = np.mean([np.std(b), np.std(g), np.std(r)])
 
-    # Calculate Final Thumbnail Score (0-100)
     contrast_norm = min(contrast_score / 50.0, 1.0) * 30
     sharpness_norm = min(sharpness_score / 1000.0, 1.0) * 20
+    vibrancy_norm = min(vibrancy / 60.0, 1.0) * 10
     face_score = 30 if face_count > 0 else 0
     center_score = 10 if face_centered else 0
-    text_penalty = max(0, (text_word_count - 5) * 5) 
     
-    final_score = max(0, min(100, (contrast_norm + sharpness_norm + face_score + center_score) - text_penalty))
+    final_score = max(0, min(100, contrast_norm + sharpness_norm + vibrancy_norm + face_score + center_score))
 
     return {
         "score": round(final_score, 1),
         "contrast": round(contrast_score, 2),
         "sharpness": round(sharpness_score, 2),
+        "vibrancy": round(vibrancy, 2),
         "faces": face_count,
-        "face_centered": face_centered,
-        "text_words": text_word_count
+        "face_centered": face_centered
     }
 
 def analyze_hook_video(video_path):
@@ -136,9 +117,8 @@ def analyze_hook_video(video_path):
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0: fps = 30 # Fallback
+    if fps == 0: fps = 30 
     
-    # STRICT RAM SAFEGUARD: Only analyze the first 30 seconds
     max_frames = int(fps * 30)
     sample_rate = max(1, int(fps / 2)) 
     
@@ -170,29 +150,25 @@ def analyze_hook_video(video_path):
 def analyze_script_with_llm(transcript, cpm):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key:
-        return {"error": "No Groq API Key found in Streamlit secrets."}
+        return {"error": "No Groq API Key found."}
 
     client = Groq(api_key=api_key)
     
     prompt = f"""
-    You are an expert YouTube strategist specializing in highly technical, B2B, and quantitative finance channels.
-    Analyze this 30-second hook transcript and the visual pacing data.
+    You are an expert YouTube strategist for technical/finance channels.
+    Analyze this hook transcript and visual pacing.
     
     Visual Pacing: {cpm} Cuts Per Minute.
     Transcript: "{transcript}"
     
-    Evaluate the hook on a scale of 1-10 for:
-    1. Pattern Interrupt
-    2. Value Proposition
-    3. Jargon Density
-    
-    Output STRICTLY in JSON format with these keys:
+    Evaluate 1-10: Pattern Interrupt, Value Proposition, Jargon Density.
+    Output STRICT JSON:
     "pattern_interrupt_score" (int),
     "value_prop_score" (int),
     "jargon_score" (int),
     "overall_hook_score" (int 0-100),
-    "critique" (string, 2 sentences max),
-    "rewrite_suggestion" (string, a punchier 2-sentence rewrite).
+    "critique" (string),
+    "rewrite_suggestion" (string).
     """
     
     try:
@@ -206,23 +182,21 @@ def analyze_script_with_llm(transcript, cpm):
     except Exception as e:
         return {"error": str(e)}
 
-# --- STREAMLIT UI ---
-
 st.title("📈 QuantTube Analyzer")
-st.markdown("Proprietary Computer Vision & NLP pipeline for optimizing Algo-Trading & Tech YouTube content.")
+st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
 with st.sidebar:
     st.header("⚙️ Settings")
     if "GROQ_API_KEY" not in st.secrets:
-        st.warning("No Groq API Key found. LLM Hook Analysis will be disabled.")
+        st.warning("No Groq API Key found in Secrets.")
 
 url_input = st.text_input("Enter YouTube Video URL", placeholder="https://www.youtube.com/watch?v=...")
 
 if st.button("🚀 Analyze Video", type="primary", use_container_width=True):
     if not url_input:
-        st.error("Please enter a valid YouTube URL.")
+        st.error("Please enter a URL.")
     else:
-        with st.spinner("Fetching video data, thumbnails, and transcripts..."):
+        with st.spinner("Fetching data..."):
             thumb_path, video_path, transcript, error = fetch_video_data(url_input)
             
         if error:
@@ -235,7 +209,7 @@ if st.button("🚀 Analyze Video", type="primary", use_container_width=True):
                 if thumb_path and os.path.exists(thumb_path):
                     st.image(thumb_path, use_column_width=True)
                     
-                with st.spinner("Running Computer Vision..."):
+                with st.spinner("Running CV..."):
                     thumb_metrics = analyze_thumbnail(thumb_path)
                     
                 if "error" in thumb_metrics:
@@ -247,20 +221,18 @@ if st.button("🚀 Analyze Video", type="primary", use_container_width=True):
                     m1, m2, m3 = st.columns(3)
                     m1.metric("Contrast", thumb_metrics["contrast"])
                     m2.metric("Sharpness", round(thumb_metrics["sharpness"], 0))
-                    m3.metric("Faces", thumb_metrics["faces"])
+                    m3.metric("Vibrancy", thumb_metrics["vibrancy"])
                     
-                    if thumb_metrics["text_words"] > 5:
-                        st.warning(f"⚠️ **Text Clutter:** {thumb_metrics['text_words']} words. Keep it under 5.")
-                    else:
-                        st.success(f"✅ **Text Ratio:** {thumb_metrics['text_words']} words. Perfect.")
-                        
+                    st.write(f"**Faces Detected:** {thumb_metrics['faces']}")
                     if thumb_metrics["faces"] > 0 and not thumb_metrics["face_centered"]:
-                        st.warning("⚠️ **Composition:** Face detected, but not centered.")
+                        st.warning("⚠️ Face detected, but not centered.")
+                    elif thumb_metrics["faces"] > 0:
+                        st.success("✅ Face composition is strong.")
 
             with col2:
                 st.subheader("🎬 Hook Analysis (First 30s)")
                 
-                with st.spinner("Analyzing visual pacing..."):
+                with st.spinner("Analyzing pacing..."):
                     vid_metrics = analyze_hook_video(video_path)
                     
                 if "error" in vid_metrics:
@@ -269,12 +241,12 @@ if st.button("🚀 Analyze Video", type="primary", use_container_width=True):
                     cpm = vid_metrics["cpm"]
                     st.metric("Visual Pacing", f"{cpm} Cuts/Min")
                     if cpm < 10:
-                        st.warning("⚠️ **Pacing:** Too slow. Aim for 15-25 CPM.")
+                        st.warning("⚠️ Pacing too slow. Aim for 15-25 CPM.")
                     else:
-                        st.success("✅ **Pacing:** Excellent visual retention.")
+                        st.success("✅ Excellent visual retention.")
                 
                 if "GROQ_API_KEY" in st.secrets and transcript != "No transcript available.":
-                    with st.spinner("Running LLM on transcript..."):
+                    with st.spinner("Running LLM..."):
                         llm_data = analyze_script_with_llm(transcript, cpm)
                         
                     if "error" in llm_data:
@@ -287,18 +259,15 @@ if st.button("🚀 Analyze Video", type="primary", use_container_width=True):
                         s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
                         
                         hook_score = llm_data.get("overall_hook_score", 0)
-                        st.progress(hook_score / 100)
+                        st.progress(min(hook_score, 100) / 100)
                         st.caption(f"Overall Hook Score: {hook_score}/100")
                         
                         st.info(f"**AI Critique:** {llm_data.get('critique', 'N/A')}")
                         st.success(f"**Suggested Rewrite:** {llm_data.get('rewrite_suggestion', 'N/A')}")
                 else:
-                    st.info("Add your free Groq API key to Streamlit secrets to unlock AI script analysis.")
+                    st.info("Add Groq API key to Secrets to unlock AI script analysis.")
 
-            # Cleanup temp files safely
             for f in [thumb_path, video_path]:
                 if f and os.path.exists(f):
-                    try:
-                        os.remove(f)
-                    except Exception:
-                        pass
+                    try: os.remove(f)
+                    except: pass
