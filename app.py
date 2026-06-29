@@ -186,7 +186,7 @@ st.title("📈 QuantTube Analyzer")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
 with st.sidebar:
-    st.header("️ Settings")
+    st.header("⚙️ Settings")
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
 
@@ -195,17 +195,24 @@ col_url, col_upload = st.columns(2)
 
 with col_url:
     st.subheader("1. YouTube URL")
-    st.caption("Used for Thumbnail & Transcript")
+    st.caption("Used for Thumbnail & Auto-Fetch Transcript")
     url_input = st.text_input("Paste YouTube URL", placeholder="https://www.youtube.com/watch?v=...", label_visibility="collapsed")
 
 with col_upload:
-    st.subheader("2. Video File (Optional)")
+    st.subheader("2. Video File")
     st.caption("Upload MP4 for Hook Analysis")
     uploaded_file = st.file_uploader("Upload Video", type=["mp4", "mov", "avi"], label_visibility="collapsed")
 
+# MANUAL TRANSCRIPT FALLBACK
+st.subheader("3. Transcript (Optional)")
+st.caption("Paste your script here if auto-fetch fails")
+manual_transcript = st.text_area("Or paste your hook script manually (first 30 seconds)", 
+                                  height=100, 
+                                  placeholder="In this video, I'm going to show you how to validate Bitcoin trading strategies in just 8 minutes...")
+
 if st.button("🚀 Analyze", type="primary", use_container_width=True):
-    if not url_input and not uploaded_file:
-        st.error("Please provide a YouTube URL, upload a video, or both.")
+    if not url_input and not uploaded_file and not manual_transcript:
+        st.error("Please provide a YouTube URL, upload a video, or paste a transcript.")
     else:
         with st.spinner("Processing..."):
             # Handle URL Data
@@ -276,16 +283,19 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                     elif cpm < 20:
                         st.success("✅ **Excellent Pacing:** High energy while maintaining clarity")
                     else:
-                        st.warning("️ **Very Fast:** Ensure viewers can follow the technical details")
+                        st.warning("⚠️ **Very Fast:** Ensure viewers can follow the technical details")
+                    
+                    # Determine which transcript to use
+                    final_transcript = manual_transcript if manual_transcript else transcript
                     
                     # LLM Analysis with specific error handling
                     if "GROQ_API_KEY" not in st.secrets:
                         st.warning("⚠️ **Missing API Key:** Add your Groq API key to Streamlit Secrets.")
-                    elif not transcript or transcript == "No transcript available.":
-                        st.warning("⚠️ **Missing Transcript:** Paste the YouTube URL in Box 1 so the app can fetch your script for AI analysis.")
+                    elif not final_transcript or final_transcript == "No transcript available.":
+                        st.warning("⚠️ **Missing Transcript:** Either paste the YouTube URL in Box 1 OR manually paste your script in Box 3.")
                     else:
                         with st.spinner("Running AI script analysis..."):
-                            llm_data = analyze_script_with_llm(transcript, cpm)
+                            llm_data = analyze_script_with_llm(final_transcript, cpm)
                             
                         if "error" in llm_data:
                             st.error(llm_data["error"])
