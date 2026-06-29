@@ -10,14 +10,17 @@ from youtube_transcript_api import YouTubeTranscriptApi
 import re
 import urllib.request
 
+# --- PAGE CONFIG ---
 st.set_page_config(page_title="QuantTube Analyzer", page_icon="📈", layout="wide")
 
+# --- INITIALIZATION ---
 @st.cache_resource
 def load_face_cascade():
     return cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 face_cascade = load_face_cascade()
 
+# --- HELPER FUNCTIONS ---
 def extract_video_id(url):
     regex = r"(?:v=|\/)([0-9A-Za-z_-]{11}).*"
     match = re.search(regex, url)
@@ -183,7 +186,7 @@ st.title("📈 QuantTube Analyzer")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("️ Settings")
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
 
@@ -226,7 +229,7 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
         
         # THUMBNAIL
         with col1:
-            st.subheader("️ Thumbnail Analysis")
+            st.subheader("🖼️ Thumbnail Analysis")
             if thumb_path and os.path.exists(thumb_path):
                 st.image(thumb_path, use_column_width=True)
                 with st.spinner("Analyzing thumbnail..."):
@@ -264,13 +267,23 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                 else:
                     cpm = vid_metrics["cpm"]
                     st.metric("Visual Pacing", f"{cpm} Cuts/Min")
-                    if cpm < 10:
-                        st.warning("⚠️ Pacing too slow. Aim for 15-25 CPM.")
-                    else:
-                        st.success("✅ Excellent visual retention.")
                     
-                    # LLM
-                    if "GROQ_API_KEY" in st.secrets and transcript and transcript != "No transcript available.":
+                    # Niche-specific feedback
+                    if cpm < 5:
+                        st.error("⚠️ **Very Slow:** Consider adding B-roll or zoom cuts every 5-6 seconds")
+                    elif cpm < 10:
+                        st.success("✅ **Good for Technical Content:** Perfect pace for algo-trading education")
+                    elif cpm < 20:
+                        st.success("✅ **Excellent Pacing:** High energy while maintaining clarity")
+                    else:
+                        st.warning("️ **Very Fast:** Ensure viewers can follow the technical details")
+                    
+                    # LLM Analysis with specific error handling
+                    if "GROQ_API_KEY" not in st.secrets:
+                        st.warning("⚠️ **Missing API Key:** Add your Groq API key to Streamlit Secrets.")
+                    elif not transcript or transcript == "No transcript available.":
+                        st.warning("⚠️ **Missing Transcript:** Paste the YouTube URL in Box 1 so the app can fetch your script for AI analysis.")
+                    else:
                         with st.spinner("Running AI script analysis..."):
                             llm_data = analyze_script_with_llm(transcript, cpm)
                             
@@ -289,8 +302,6 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                             
                             st.info(f"**AI Critique:** {llm_data.get('critique', 'N/A')}")
                             st.success(f"**Suggested Rewrite:** {llm_data.get('rewrite_suggestion', 'N/A')}")
-                    else:
-                        st.info("Add Groq API key & YouTube URL to unlock AI analysis.")
             else:
                 st.info("Upload an MP4 file to analyze the video hook.")
 
