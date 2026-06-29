@@ -1,14 +1,11 @@
-import mediapipe as mp
 import streamlit as st
 import cv2
 import numpy as np
-import mediapipe as mp
 import yt_dlp
 import tempfile
 import os
 import json
 from groq import Groq
-from rapidocr_onnxruntime import RapidOCR
 from youtube_transcript_api import YouTubeTranscriptApi
 import re
 import urllib.request
