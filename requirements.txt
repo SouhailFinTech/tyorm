@@ -1,9 +1,7 @@
-streamlit==1.36.0
-opencv-python-headless==4.10.0.84
-mediapipe==0.10.14
+streamlit
+opencv-python-headless
 yt-dlp
 youtube-transcript-api
 groq
-rapidocr-onnxruntime
 numpy
 pillow
