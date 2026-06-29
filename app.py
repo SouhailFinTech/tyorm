@@ -146,6 +146,70 @@ def analyze_hook_video(video_path):
     except Exception as e:
         return {"error": f"Video analysis failed: {str(e)[:100]}"}
 
+def detect_boring_signals(video_path):
+    """Analyzes visual stagnation and motion to detect boring segments."""
+    if not video_path or not os.path.exists(video_path):
+        return {"error": "No video file"}
+
+    try:
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps == 0: fps = 30
+        
+        # Limit to first 30 seconds to prevent timeouts
+        max_frames = int(fps * 30)
+        sample_rate = 3 # Check every 3rd frame for speed
+        
+        stagnant_count = 0
+        total_comparisons = 0
+        motion_scores = []
+        prev_frame = None
+        frame_count = 0
+
+        while frame_count < max_frames:
+            ret, frame = cap.read()
+            if not ret: break
+
+            if frame_count % sample_rate == 0:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                gray = cv2.resize(gray, (320, 180)) # Resize for CPU efficiency
+
+                if prev_frame is not None:
+                    diff = cv2.absdiff(prev_frame, gray)
+                    motion = np.mean(diff)
+                    motion_scores.append(motion)
+
+                    # If motion is very low, it's a stagnant frame
+                    if motion < 8.0: 
+                        stagnant_count += 1
+                    total_comparisons += 1
+
+                prev_frame = gray
+            frame_count += 1
+
+        cap.release()
+
+        if total_comparisons == 0:
+            return {"boring_score": 50, "stagnation_rate": 0, "avg_motion": 0, "is_boring": False, "verdict": "Could not analyze."}
+
+        stagnation_rate = (stagnant_count / total_comparisons) * 100
+        avg_motion = np.mean(motion_scores)
+
+        # Boring score calculation: High stagnation + low motion = high score (boring)
+        motion_penalty = max(0, 15 - avg_motion) * 3 
+        boring_score = int(min(100, (stagnation_rate * 0.5) + motion_penalty))
+        is_boring = boring_score > 50
+
+        return {
+            "boring_score": boring_score,
+            "stagnation_rate": round(stagnation_rate, 1),
+            "avg_motion": round(avg_motion, 2),
+            "is_boring": is_boring,
+            "verdict": "⚠️ BORING - Add visual variety" if is_boring else "✅ ENGAGING - Good visual dynamics"
+        }
+    except Exception as e:
+        return {"error": f"Analysis failed: {str(e)[:100]}"}
+
 def analyze_script_with_llm(transcript, cpm):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key:
@@ -236,7 +300,7 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
         
         # THUMBNAIL
         with col1:
-            st.subheader("🖼️ Thumbnail Analysis")
+            st.subheader("️ Thumbnail Analysis")
             if thumb_path and os.path.exists(thumb_path):
                 st.image(thumb_path, use_column_width=True)
                 with st.spinner("Analyzing thumbnail..."):
@@ -263,9 +327,10 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
 
         # HOOK
         with col2:
-            st.subheader("🎬 Hook Analysis (First 30s)")
+            st.subheader(" Hook Analysis (First 30s)")
             
             if video_path and os.path.exists(video_path):
+                # 1. Pacing Analysis
                 with st.spinner("Analyzing video pacing..."):
                     vid_metrics = analyze_hook_video(video_path)
                     
@@ -275,7 +340,6 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                     cpm = vid_metrics["cpm"]
                     st.metric("Visual Pacing", f"{cpm} Cuts/Min")
                     
-                    # Niche-specific feedback
                     if cpm < 5:
                         st.error("⚠️ **Very Slow:** Consider adding B-roll or zoom cuts every 5-6 seconds")
                     elif cpm < 10:
@@ -284,34 +348,62 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                         st.success("✅ **Excellent Pacing:** High energy while maintaining clarity")
                     else:
                         st.warning("⚠️ **Very Fast:** Ensure viewers can follow the technical details")
+
+                # 2. BORING DETECTOR
+                with st.spinner("Detecting boring signals..."):
+                    boring_metrics = detect_boring_signals(video_path)
                     
-                    # Determine which transcript to use
-                    final_transcript = manual_transcript if manual_transcript else transcript
+                if "error" in boring_metrics:
+                    st.error(boring_metrics["error"])
+                else:
+                    st.markdown("---")
+                    st.subheader("🎯 Boring Detector")
                     
-                    # LLM Analysis with specific error handling
-                    if "GROQ_API_KEY" not in st.secrets:
-                        st.warning("⚠️ **Missing API Key:** Add your Groq API key to Streamlit Secrets.")
-                    elif not final_transcript or final_transcript == "No transcript available.":
-                        st.warning("⚠️ **Missing Transcript:** Either paste the YouTube URL in Box 1 OR manually paste your script in Box 3.")
+                    col_b1, col_b2, col_b3 = st.columns(3)
+                    with col_b1:
+                        st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
+                    with col_b2:
+                        st.metric("Visual Stagnation", f"{boring_metrics['stagnation_rate']}%", delta="High = Too static")
+                    with col_b3:
+                        st.metric("Motion Level", f"{boring_metrics['avg_motion']}", delta="Higher = Dynamic")
+                    
+                    if boring_metrics['is_boring']:
+                        st.error(f"🚨 **{boring_metrics['verdict']}**")
+                        st.warning("**Fixes:**\n"
+                                  "- Add B-roll footage every 10-15 seconds\n"
+                                  "- Use zoom cuts (punch in/out)\n"
+                                  "- Add text overlays/graphics\n"
+                                  "- Show screen recordings/code demos")
                     else:
-                        with st.spinner("Running AI script analysis..."):
-                            llm_data = analyze_script_with_llm(final_transcript, cpm)
-                            
-                        if "error" in llm_data:
-                            st.error(llm_data["error"])
-                        else:
-                            st.markdown("---")
-                            s1, s2, s3 = st.columns(3)
-                            s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
-                            s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
-                            s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
-                            
-                            hook_score = llm_data.get("overall_hook_score", 0)
-                            st.progress(min(hook_score, 100) / 100)
-                            st.caption(f"Overall Hook Score: {hook_score}/100")
-                            
-                            st.info(f"**AI Critique:** {llm_data.get('critique', 'N/A')}")
-                            st.success(f"**Suggested Rewrite:** {llm_data.get('rewrite_suggestion', 'N/A')}")
+                        st.success(f"✅ **{boring_metrics['verdict']}**")
+                        st.info("Your video maintains good visual interest throughout!")
+
+                # 3. LLM Script Analysis
+                final_transcript = manual_transcript if manual_transcript else transcript
+                
+                if "GROQ_API_KEY" not in st.secrets:
+                    st.warning("⚠️ **Missing API Key:** Add your Groq API key to Streamlit Secrets.")
+                elif not final_transcript or final_transcript == "No transcript available.":
+                    st.warning("⚠️ **Missing Transcript:** Either paste the YouTube URL in Box 1 OR manually paste your script in Box 3.")
+                else:
+                    with st.spinner("Running AI script analysis..."):
+                        llm_data = analyze_script_with_llm(final_transcript, cpm)
+                        
+                    if "error" in llm_data:
+                        st.error(llm_data["error"])
+                    else:
+                        st.markdown("---")
+                        s1, s2, s3 = st.columns(3)
+                        s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
+                        s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
+                        s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
+                        
+                        hook_score = llm_data.get("overall_hook_score", 0)
+                        st.progress(min(hook_score, 100) / 100)
+                        st.caption(f"Overall Hook Score: {hook_score}/100")
+                        
+                        st.info(f"**AI Critique:** {llm_data.get('critique', 'N/A')}")
+                        st.success(f"**Suggested Rewrite:** {llm_data.get('rewrite_suggestion', 'N/A')}")
             else:
                 st.info("Upload an MP4 file to analyze the video hook.")
 
