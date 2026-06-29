@@ -66,12 +66,10 @@ def analyze_thumbnail(image_path):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # --- FIX: AUTO-CROP BLACK BARS ---
-    # Find pixels that aren't pure black (threshold 15)
     _, thresh = cv2.threshold(gray, 15, 255, cv2.THRESH_BINARY)
     non_zero = cv2.findNonZero(thresh)
     if non_zero is not None:
         x, y, w, h = cv2.boundingRect(non_zero)
-        # Crop the image to remove the black borders
         img = img[y:y+h, x:x+w]
         gray = gray[y:y+h, x:x+w]
     # ----------------------------------
@@ -218,6 +216,98 @@ def detect_boring_signals(video_path):
     except Exception as e:
         return {"error": f"Analysis failed: {str(e)[:100]}"}
 
+def analyze_title_with_llm(title, transcript, topic):
+    """Analyze and optimize YouTube title for SEO and CTR"""
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key:
+        return {"error": "No Groq API Key found."}
+
+    client = Groq(api_key=api_key)
+    
+    prompt = f"""
+    You are a YouTube SEO expert specializing in technical/finance content.
+    
+    Current Title: "{title}"
+    Video Topic: {topic}
+    Transcript Snippet: "{transcript[:300]}"
+    
+    Analyze this title and provide:
+    1. Title score (0-100) based on: curiosity, specificity, keyword optimization, length (ideal 50-60 chars)
+    2. Character count
+    3. 3 optimized alternative titles that are more clickable and SEO-friendly
+    4. Top 5 keywords that should be in the title
+    5. Emotional trigger analysis (curiosity/urgency/specificity)
+    
+    Output STRICT JSON:
+    "title_score" (int 0-100),
+    "character_count" (int),
+    "is_optimal_length" (bool),
+    "alternative_titles" (array of 3 strings),
+    "recommended_keywords" (array of 5 strings),
+    "emotional_triggers" (string),
+    "improvement_notes" (string)
+    """
+    
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            response_format={"type": "json_object"}
+        )
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
+
+def generate_thumbnail_brief(title, transcript, topic):
+    """Generate a complete thumbnail brief with text, colors, and AI image prompt"""
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key:
+        return {"error": "No Groq API Key found."}
+
+    client = Groq(api_key=api_key)
+    
+    prompt = f"""
+    You are a YouTube thumbnail designer expert for technical/finance channels.
+    
+    Video Title: "{title}"
+    Video Topic: {topic}
+    Transcript Snippet: "{transcript[:300]}"
+    
+    Create a complete thumbnail brief that will maximize CTR for an algo-trading/finance audience.
+    
+    Include:
+    1. Thumbnail text (max 5 words, must be readable on mobile)
+    2. Color scheme (specific hex codes for background, text, accents)
+    3. Layout description (where to place elements)
+    4. Visual elements to include (charts, logos, arrows, etc.)
+    5. A detailed Midjourney/DALL-E prompt to generate the thumbnail
+    6. Thumbnail style (professional/energetic/minimalist/etc.)
+    7. Do's and Don'ts for this specific thumbnail
+    
+    Output STRICT JSON:
+    "thumbnail_text" (string, max 5 words),
+    "color_scheme" (object with background, text, accent hex codes),
+    "layout" (string description),
+    "visual_elements" (array of strings),
+    "midjourney_prompt" (string, detailed),
+    "style" (string),
+    "dos" (array of 3 strings),
+    "donts" (array of 3 strings),
+    "thumbnail_score_prediction" (int 0-100)
+    """
+    
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            response_format={"type": "json_object"}
+        )
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
+
 def analyze_script_with_llm(transcript, cpm):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key:
@@ -254,13 +344,16 @@ def analyze_script_with_llm(transcript, cpm):
         return {"error": str(e)}
 
 # --- UI ---
-st.title("📈 QuantTube Analyzer")
+st.title("📈 QuantTube Analyzer Pro")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
 with st.sidebar:
     st.header("⚙️ Settings")
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
+    
+    st.markdown("---")
+    st.info("**Pro Features:**\n- Title Optimizer\n- Thumbnail Brief Generator\n- AI Script Analysis")
 
 # INPUT SECTION
 col_url, col_upload = st.columns(2)
@@ -275,18 +368,40 @@ with col_upload:
     st.caption("Upload MP4 for Hook Analysis")
     uploaded_file = st.file_uploader("Upload Video", type=["mp4", "mov", "avi"], label_visibility="collapsed")
 
+# TITLE INPUT
+st.subheader("3. Video Title")
+st.caption("Required for Title Optimization & Thumbnail Brief")
+title_input = st.text_input("Enter your video title", placeholder="e.g., How I Backtested Bitcoin Strategies in 8 Minutes", label_visibility="collapsed")
+
+# TOPIC/KEYWORD
+st.subheader("4. Main Topic/Keyword")
+st.caption("What is this video primarily about?")
+topic_input = st.text_input("Main topic", placeholder="e.g., Bitcoin backtesting, algo trading, Python strategy", label_visibility="collapsed")
+
 # MANUAL TRANSCRIPT FALLBACK
-st.subheader("3. Transcript (Optional)")
+st.subheader("5. Transcript (Optional)")
 st.caption("Paste your script here if auto-fetch fails")
 manual_transcript = st.text_area("Or paste your hook script manually (first 30 seconds)", 
                                   height=100, 
                                   placeholder="In this video, I'm going to show you how to validate Bitcoin trading strategies in just 8 minutes...")
 
-if st.button("🚀 Analyze", type="primary", use_container_width=True):
-    if not url_input and not uploaded_file and not manual_transcript:
+# ANALYZE BUTTON
+analyze_col1, analyze_col2 = st.columns([3, 1])
+with analyze_col1:
+    run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
+with analyze_col2:
+    quick_thumb = st.button("🎨 Thumbnail Brief Only", use_container_width=True)
+
+if run_analysis or quick_thumb:
+    if not title_input and not quick_thumb:
+        st.error("Please enter a video title for optimization.")
+    elif not topic_input and not quick_thumb:
+        st.error("Please enter the main topic/keyword.")
+    elif not url_input and not uploaded_file and not manual_transcript:
         st.error("Please provide a YouTube URL, upload a video, or paste a transcript.")
     else:
         with st.spinner("Processing..."):
+            # Handle URL Data
             thumb_path = None
             transcript = ""
             if url_input:
@@ -294,6 +409,7 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                 if url_error:
                     st.error(url_error)
 
+            # Handle Uploaded Video
             video_path = None
             if uploaded_file is not None:
                 temp_dir = tempfile.gettempdir()
@@ -301,22 +417,114 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                 with open(video_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
-        # DISPLAY RESULTS
-        col1, col2 = st.columns(2)
+        # Use manual transcript if provided, otherwise use fetched
+        final_transcript = manual_transcript if manual_transcript else transcript
         
-        # THUMBNAIL
-        with col1:
-            st.subheader("🖼️ Thumbnail Analysis")
+        # === TITLE OPTIMIZATION ===
+        if title_input and not quick_thumb:
+            st.markdown("---")
+            st.subheader("📝 Title Optimization")
+            
+            with st.spinner("Analyzing title SEO and generating alternatives..."):
+                title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input)
+            
+            if "error" in title_analysis:
+                st.error(title_analysis["error"])
+            else:
+                col_t1, col_t2, col_t3 = st.columns(3)
+                
+                with col_t1:
+                    st.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100")
+                
+                with col_t2:
+                    st.metric("Character Count", title_analysis.get('character_count', 0))
+                
+                with col_t3:
+                    optimal = "✅ Optimal" if title_analysis.get('is_optimal_length', False) else "⚠️ Too long/short"
+                    st.metric("Length", optimal)
+                
+                st.markdown(f"**Emotional Triggers:** {title_analysis.get('emotional_triggers', 'N/A')}")
+                st.markdown(f"**Improvement Notes:** {title_analysis.get('improvement_notes', 'N/A')}")
+                
+                st.markdown("---")
+                st.markdown("### 🎯 Recommended Alternative Titles:")
+                
+                alternatives = title_analysis.get('alternative_titles', [])
+                for i, alt in enumerate(alternatives, 1):
+                    st.info(f"**Option {i}:** {alt}")
+                
+                st.markdown("---")
+                st.markdown("### 🔑 Recommended Keywords:")
+                keywords = title_analysis.get('recommended_keywords', [])
+                st.write(", ".join(keywords))
+
+        # === THUMBNAIL BRIEF ===
+        if title_input:
+            st.markdown("---")
+            st.subheader("🎨 AI-Generated Thumbnail Brief")
+            
+            with st.spinner("Generating thumbnail brief and Midjourney prompt..."):
+                thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input)
+            
+            if "error" in thumb_brief:
+                st.error(thumb_brief["error"])
+            else:
+                # Prediction score
+                pred_score = thumb_brief.get('thumbnail_score_prediction', 0)
+                st.metric("Predicted Thumbnail CTR Score", f"{pred_score}/100")
+                
+                col_b1, col_b2 = st.columns(2)
+                
+                with col_b1:
+                    st.markdown("### 📋 Thumbnail Specifications:")
+                    st.markdown(f"**Text on Thumbnail:** {thumb_brief.get('thumbnail_text', 'N/A')}")
+                    st.markdown(f"**Style:** {thumb_brief.get('style', 'N/A')}")
+                    
+                    st.markdown("**Color Scheme:**")
+                    colors = thumb_brief.get('color_scheme', {})
+                    if colors:
+                        st.code(f"Background: {colors.get('background', '#000000')}")
+                        st.code(f"Text: {colors.get('text', '#FFFFFF')}")
+                        st.code(f"Accent: {colors.get('accent', '#00FF00')}")
+                    
+                    st.markdown("**Layout:**")
+                    st.write(thumb_brief.get('layout', 'N/A'))
+                    
+                    st.markdown("**Visual Elements:**")
+                    for element in thumb_brief.get('visual_elements', []):
+                        st.write(f"• {element}")
+                
+                with col_b2:
+                    st.markdown("### ✅ Do's:")
+                    for do_item in thumb_brief.get('dos', []):
+                        st.success(f"✓ {do_item}")
+                    
+                    st.markdown("### ❌ Don'ts:")
+                    for dont_item in thumb_brief.get('donts', []):
+                        st.error(f"✗ {dont_item}")
+                
+                st.markdown("---")
+                st.markdown("### 🤖 Midjourney/DALL-E Prompt:")
+                st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
+                
+                st.info("💡 **How to use:** Copy this prompt into Midjourney, DALL-E 3, or Leonardo AI to generate your thumbnail!")
+
+        if not quick_thumb:
+            # === THUMBNAIL ANALYSIS (if URL provided) ===
             if thumb_path and os.path.exists(thumb_path):
+                st.markdown("---")
+                st.subheader("🖼️ Current Thumbnail Analysis")
+                
                 st.image(thumb_path, use_column_width=True)
-                with st.spinner("Analyzing thumbnail (auto-cropping black bars)..."):
+                
+                with st.spinner("Analyzing current thumbnail..."):
                     thumb_metrics = analyze_thumbnail(thumb_path)
                     
                 if "error" in thumb_metrics:
                     st.error(thumb_metrics["error"])
                 else:
                     score = thumb_metrics["score"]
-                    st.metric("Thumbnail Score", f"{score}/100", delta="Optimize for CTR")
+                    st.metric("Current Thumbnail Score", f"{score}/100", delta="Optimize for CTR")
                     
                     m1, m2, m3 = st.columns(3)
                     m1.metric("Contrast", thumb_metrics["contrast"])
@@ -330,14 +538,12 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                         st.success("✅ Face composition is strong.")
                     else:
                         st.info("ℹ️ No face detected. (Normal for faceless channels)")
-            else:
-                st.info("Provide a YouTube URL to analyze the thumbnail.")
 
-        # HOOK
-        with col2:
-            st.subheader("🎬 Hook Analysis (First 30s)")
-            
+            # === HOOK ANALYSIS ===
             if video_path and os.path.exists(video_path):
+                st.markdown("---")
+                st.subheader("🎬 Hook Analysis (First 30s)")
+                
                 with st.spinner("Analyzing video pacing..."):
                     vid_metrics = analyze_hook_video(video_path)
                     
@@ -354,7 +560,7 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                     elif cpm < 20:
                         st.success("✅ **Excellent Pacing:** High energy while maintaining clarity")
                     else:
-                        st.warning("️ **Very Fast:** Ensure viewers can follow the technical details")
+                        st.warning("⚠️ **Very Fast:** Ensure viewers can follow the technical details")
 
                 with st.spinner("Detecting boring signals..."):
                     boring_metrics = detect_boring_signals(video_path)
@@ -384,12 +590,11 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                         st.success(f"✅ **{boring_metrics['verdict']}**")
                         st.info("Your video maintains good visual interest throughout!")
 
-                final_transcript = manual_transcript if manual_transcript else transcript
-                
+                # === AI SCRIPT ANALYSIS ===
                 if "GROQ_API_KEY" not in st.secrets:
                     st.warning("⚠️ **Missing API Key:** Add your Groq API key to Streamlit Secrets.")
                 elif not final_transcript or final_transcript == "No transcript available.":
-                    st.warning("️ **Missing Transcript:** Either paste the YouTube URL in Box 1 OR manually paste your script in Box 3.")
+                    st.warning("⚠️ **Missing Transcript:** Either paste the YouTube URL in Box 1 OR manually paste your script in Box 5.")
                 else:
                     with st.spinner("Running AI script analysis..."):
                         llm_data = analyze_script_with_llm(final_transcript, cpm)
@@ -398,6 +603,7 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                         st.error(llm_data["error"])
                     else:
                         st.markdown("---")
+                        st.subheader("📊 Script Quality Metrics")
                         s1, s2, s3 = st.columns(3)
                         s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
                         s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
@@ -409,9 +615,8 @@ if st.button("🚀 Analyze", type="primary", use_container_width=True):
                         
                         st.info(f"**AI Critique:** {llm_data.get('critique', 'N/A')}")
                         st.success(f"**Suggested Rewrite:** {llm_data.get('rewrite_suggestion', 'N/A')}")
-            else:
-                st.info("Upload an MP4 file to analyze the video hook.")
 
+        # Cleanup
         for f in [thumb_path, video_path]:
             if f and os.path.exists(f):
                 try: os.remove(f)
