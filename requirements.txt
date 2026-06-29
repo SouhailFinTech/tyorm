@@ -1,0 +1,9 @@
+streamlit
+opencv-python-headless
+mediapipe
+yt-dlp
+youtube-transcript-api
+groq
+rapidocr-onnxruntime
+numpy
+pillow
