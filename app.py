@@ -23,14 +23,14 @@ def extract_video_id(url):
     match = re.search(regex, url)
     return match.group(1) if match else None
 
-def fetch_video_data(url):
+def fetch_thumbnail_and_transcript(url):
     video_id = extract_video_id(url)
     if not video_id:
-        return None, None, None, "Invalid YouTube URL"
+        return None, None, "Invalid YouTube URL"
 
     temp_dir = tempfile.gettempdir()
 
-    # Get Transcript
+    # 1. Get Transcript
     transcript_text = ""
     try:
         transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
@@ -38,7 +38,7 @@ def fetch_video_data(url):
     except Exception:
         transcript_text = "No transcript available."
 
-    # Download Thumbnail
+    # 2. Download Thumbnail
     thumb_path = os.path.join(temp_dir, f"thumb_{video_id}.jpg")
     try:
         ydl_thumb_opts = {'quiet': True, 'skip_download': True}
@@ -47,37 +47,10 @@ def fetch_video_data(url):
             thumb_url = info.get('thumbnail')
             if thumb_url:
                 urllib.request.urlretrieve(thumb_url, thumb_path)
-    except Exception as e:
+    except Exception:
         thumb_path = None
 
-    # Download Video - Try multiple formats
-    video_path = None
-    video_formats = [
-        'worst[height<=480]',
-        'worst',
-        '18',  # MP4 360p
-        '22',  # MP4 720p
-    ]
-    
-    for fmt in video_formats:
-        temp_video_path = os.path.join(temp_dir, f"video_{video_id}.mp4")
-        try:
-            ydl_vid_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'format': fmt,
-                'outtmpl': temp_video_path,
-                'socket_timeout': 30,
-            }
-            with yt_dlp.YoutubeDL(ydl_vid_opts) as ydl:
-                ydl.download([url])
-                if os.path.exists(temp_video_path) and os.path.getsize(temp_video_path) > 0:
-                    video_path = temp_video_path
-                    break
-        except Exception:
-            continue
-
-    return thumb_path, video_path, transcript_text[:1500], None
+    return thumb_path, transcript_text[:1500], None
 
 def analyze_thumbnail(image_path):
     if not image_path or not os.path.exists(image_path):
@@ -89,15 +62,11 @@ def analyze_thumbnail(image_path):
         
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 1. Contrast (LAB color space)
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     l_channel, _, _ = cv2.split(lab)
     contrast_score = float(np.std(l_channel))
-    
-    # 2. Sharpness (Laplacian variance)
     sharpness_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    
-    # 3. Face Detection
+
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
     face_count = len(faces)
     
@@ -111,18 +80,15 @@ def analyze_thumbnail(image_path):
         if 0.2 < face_center_x < 0.8 and 0.2 < face_center_y < 0.8:
             face_centered = True
 
-    # 4. Vibrancy (color standard deviation)
     b, g, r = cv2.split(img)
     vibrancy = float(np.mean([np.std(b), np.std(g), np.std(r)]))
 
-    # STABLE SCORING (rounded to avoid fluctuations)
     contrast_norm = min(contrast_score / 50.0, 1.0) * 30
-    sharpness_norm = min(sharpness_score / 2000.0, 1.0) * 20  # Adjusted threshold
+    sharpness_norm = min(sharpness_score / 2000.0, 1.0) * 20
     vibrancy_norm = min(vibrancy / 60.0, 1.0) * 10
     face_score = 30 if face_count > 0 else 0
     center_score = 10 if face_centered else 0
     
-    # Round to nearest integer for consistency
     final_score = int(round(max(0, min(100, contrast_norm + sharpness_norm + vibrancy_norm + face_score + center_score))))
 
     return {
@@ -147,7 +113,6 @@ def analyze_hook_video(video_path):
         if fps == 0 or np.isnan(fps): 
             fps = 30
         
-        # Only analyze first 30 seconds
         max_frames = int(fps * 30)
         sample_rate = max(1, int(fps / 2)) 
         
@@ -213,7 +178,7 @@ def analyze_script_with_llm(transcript, cpm):
     except Exception as e:
         return {"error": str(e)}
 
-# UI
+# --- UI ---
 st.title("📈 QuantTube Analyzer")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
@@ -222,26 +187,48 @@ with st.sidebar:
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
 
-url_input = st.text_input("Enter YouTube Video URL", placeholder="https://www.youtube.com/watch?v=...")
+# INPUT SECTION
+col_url, col_upload = st.columns(2)
 
-if st.button("🚀 Analyze Video", type="primary", use_container_width=True):
-    if not url_input:
-        st.error("Please enter a URL.")
+with col_url:
+    st.subheader("1. YouTube URL")
+    st.caption("Used for Thumbnail & Transcript")
+    url_input = st.text_input("Paste YouTube URL", placeholder="https://www.youtube.com/watch?v=...", label_visibility="collapsed")
+
+with col_upload:
+    st.subheader("2. Video File (Optional)")
+    st.caption("Upload MP4 for Hook Analysis")
+    uploaded_file = st.file_uploader("Upload Video", type=["mp4", "mov", "avi"], label_visibility="collapsed")
+
+if st.button("🚀 Analyze", type="primary", use_container_width=True):
+    if not url_input and not uploaded_file:
+        st.error("Please provide a YouTube URL, upload a video, or both.")
     else:
-        with st.spinner("Fetching data (this may take 30-60s)..."):
-            thumb_path, video_path, transcript, error = fetch_video_data(url_input)
-            
-        if error:
-            st.error(error)
-        else:
-            col1, col2 = st.columns(2)
-            
-            # THUMBNAIL ANALYSIS
-            with col1:
-                st.subheader("🖼️ Thumbnail Analysis")
-                if thumb_path and os.path.exists(thumb_path):
-                    st.image(thumb_path, use_column_width=True)
-                    
+        with st.spinner("Processing..."):
+            # Handle URL Data
+            thumb_path = None
+            transcript = ""
+            if url_input:
+                thumb_path, transcript, url_error = fetch_thumbnail_and_transcript(url_input)
+                if url_error:
+                    st.error(url_error)
+
+            # Handle Uploaded Video
+            video_path = None
+            if uploaded_file is not None:
+                temp_dir = tempfile.gettempdir()
+                video_path = os.path.join(temp_dir, "uploaded_hook_video.mp4")
+                with open(video_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+
+        # DISPLAY RESULTS
+        col1, col2 = st.columns(2)
+        
+        # THUMBNAIL
+        with col1:
+            st.subheader("️ Thumbnail Analysis")
+            if thumb_path and os.path.exists(thumb_path):
+                st.image(thumb_path, use_column_width=True)
                 with st.spinner("Analyzing thumbnail..."):
                     thumb_metrics = analyze_thumbnail(thumb_path)
                     
@@ -261,52 +248,54 @@ if st.button("🚀 Analyze Video", type="primary", use_container_width=True):
                         st.warning("⚠️ Face detected, but not centered.")
                     elif thumb_metrics["faces"] > 0:
                         st.success("✅ Face composition is strong.")
+            else:
+                st.info("Provide a YouTube URL to analyze the thumbnail.")
 
-            # HOOK ANALYSIS
-            with col2:
-                st.subheader("🎬 Hook Analysis (First 30s)")
-                
-                if video_path and os.path.exists(video_path):
-                    with st.spinner("Analyzing video pacing..."):
-                        vid_metrics = analyze_hook_video(video_path)
-                        
-                    if "error" in vid_metrics:
-                        st.error(vid_metrics["error"])
-                    else:
-                        cpm = vid_metrics["cpm"]
-                        st.metric("Visual Pacing", f"{cpm} Cuts/Min")
-                        if cpm < 10:
-                            st.warning("⚠️ Pacing too slow. Aim for 15-25 CPM.")
-                        else:
-                            st.success("✅ Excellent visual retention.")
-                        
-                        # LLM Analysis
-                        if "GROQ_API_KEY" in st.secrets and transcript != "No transcript available.":
-                            with st.spinner("Running AI script analysis..."):
-                                llm_data = analyze_script_with_llm(transcript, cpm)
-                                
-                            if "error" in llm_data:
-                                st.error(llm_data["error"])
-                            else:
-                                st.markdown("---")
-                                s1, s2, s3 = st.columns(3)
-                                s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
-                                s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
-                                s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
-                                
-                                hook_score = llm_data.get("overall_hook_score", 0)
-                                st.progress(min(hook_score, 100) / 100)
-                                st.caption(f"Overall Hook Score: {hook_score}/100")
-                                
-                                st.info(f"**AI Critique:** {llm_data.get('critique', 'N/A')}")
-                                st.success(f"**Suggested Rewrite:** {llm_data.get('rewrite_suggestion', 'N/A')}")
-                        else:
-                            st.info("Add Groq API key to unlock AI analysis.")
+        # HOOK
+        with col2:
+            st.subheader("🎬 Hook Analysis (First 30s)")
+            
+            if video_path and os.path.exists(video_path):
+                with st.spinner("Analyzing video pacing..."):
+                    vid_metrics = analyze_hook_video(video_path)
+                    
+                if "error" in vid_metrics:
+                    st.error(vid_metrics["error"])
                 else:
-                    st.warning("⚠️ Video download failed. This can happen with:\n- Age-restricted videos\n- Private/unlisted videos\n- Network restrictions\n\nThumbnail analysis still works!")
+                    cpm = vid_metrics["cpm"]
+                    st.metric("Visual Pacing", f"{cpm} Cuts/Min")
+                    if cpm < 10:
+                        st.warning("⚠️ Pacing too slow. Aim for 15-25 CPM.")
+                    else:
+                        st.success("✅ Excellent visual retention.")
+                    
+                    # LLM
+                    if "GROQ_API_KEY" in st.secrets and transcript and transcript != "No transcript available.":
+                        with st.spinner("Running AI script analysis..."):
+                            llm_data = analyze_script_with_llm(transcript, cpm)
+                            
+                        if "error" in llm_data:
+                            st.error(llm_data["error"])
+                        else:
+                            st.markdown("---")
+                            s1, s2, s3 = st.columns(3)
+                            s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
+                            s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
+                            s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
+                            
+                            hook_score = llm_data.get("overall_hook_score", 0)
+                            st.progress(min(hook_score, 100) / 100)
+                            st.caption(f"Overall Hook Score: {hook_score}/100")
+                            
+                            st.info(f"**AI Critique:** {llm_data.get('critique', 'N/A')}")
+                            st.success(f"**Suggested Rewrite:** {llm_data.get('rewrite_suggestion', 'N/A')}")
+                    else:
+                        st.info("Add Groq API key & YouTube URL to unlock AI analysis.")
+            else:
+                st.info("Upload an MP4 file to analyze the video hook.")
 
-            # Cleanup
-            for f in [thumb_path, video_path]:
-                if f and os.path.exists(f):
-                    try: os.remove(f)
-                    except: pass
+        # Cleanup
+        for f in [thumb_path, video_path]:
+            if f and os.path.exists(f):
+                try: os.remove(f)
+                except: pass
