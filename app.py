@@ -11,7 +11,7 @@ import re
 import urllib.request
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="QuantTube Analyzer Pro", page_icon="📈", layout="wide")
+st.set_page_config(page_title="QuantTube Analyzer Pro", page_icon="", layout="wide")
 
 # --- INITIALIZATION ---
 @st.cache_resource
@@ -379,7 +379,6 @@ def analyze_user_description(user_desc, title, topic, transcript):
         return {"error": str(e)}
 
 def analyze_script_with_llm(problem, mechanism, payoff, cpm):
-    """Analyzes user-provided hook elements and generates a script + Visual Storyboard"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
@@ -388,20 +387,15 @@ def analyze_script_with_llm(problem, mechanism, payoff, cpm):
     You are an elite YouTube Strategist and Visual Director for top-tier technical/quant channels.
     Visual Pacing: {cpm} Cuts Per Minute.
 
-    USER PROVIDED HOOK ELEMENTS (THE "INGREDIENTS"):
+    USER PROVIDED HOOK ELEMENTS:
     - Problem(s): {problem}
     - Mechanism(s): {mechanism}
     - Payoff(s): {payoff}
 
     TASK:
     1. Evaluate these elements on Pattern Interrupt, Value Prop, and Jargon Density (1-10).
-    2. Write a punchy, 30-second Cold Open script that seamlessly weaves these exact elements together. 
-       - RULES: Start IMMEDIATELY with the Problem. Transition into the Mechanism. End with the Payoff. 
-       - NO FLUFF: Do not use "Hi guys", "Welcome back", "Let's dive in", or "In this video". 
-       - Speak like a Senior Quant Researcher. Use the exact data points provided.
-    3. Generate a 'Visual Storyboard' for this exact 30-second script. 
-       - RULES FOR STORYBOARD: Suggest specific technical visuals: Code zooms on complex logic, chart overlays with specific indicators, kinetic typography of exact metrics, digital punch-ins.
-       - Format: Break it into 3-4 distinct time blocks (e.g., 0:00-0:05).
+    2. Write a punchy, 30-second Cold Open script weaving these elements. Start IMMEDIATELY with the Problem. NO FLUFF ("Hi guys", "Welcome back").
+    3. Generate a 'Visual Storyboard' for this 30-second script (3-4 time blocks).
 
     Output STRICT JSON:
     "pattern_interrupt_score" (int),
@@ -409,7 +403,7 @@ def analyze_script_with_llm(problem, mechanism, payoff, cpm):
     "jargon_score" (int),
     "overall_hook_score" (int 0-100),
     "critique" (string),
-    "script_rewrite" (string, the full 30s script),
+    "script_rewrite" (string),
     "visual_storyboard" (array of objects with keys: "time", "visual_action", "audio_line")
     """
     try:
@@ -417,6 +411,44 @@ def analyze_script_with_llm(problem, mechanism, payoff, cpm):
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
+            response_format={"type": "json_object"}
+        )
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
+
+def compress_script_with_llm(full_script):
+    """Compresses the script to improve pacing without losing technical details"""
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    client = Groq(api_key=api_key)
+    
+    prompt = f"""
+    You are a Ruthless Technical Editor for a top-tier Quantitative Finance YouTube channel.
+    
+    TASK: Rewrite the script below to improve speaking pace and retention.
+    
+    CRITICAL RULES TO AVOID "GARBAGE":
+    1. DO NOT SUMMARIZE. Rewrite the ENTIRE script line-by-line. Do not skip sections.
+    2. PRESERVE ALL DATA: You MUST keep every single number, code logic, variable name, and technical term (e.g., keep "0.05% taker fees", "shift(1)", "Sharpe > 1.5").
+    3. CUT THE FLUFF: Remove conversational filler ("Now let's talk about...", "As you can see...", "We start by loading...").
+    4. COMPRESS EXPLANATIONS: Combine verbose explanations of basic concepts into rapid-fire statements. (e.g., change "Pandas handles data manipulation... Numpy performs vectorized calculations..." to "We load Pandas and Numpy for vectorized data manipulation...").
+    5. TARGET: Reduce the total word count by 40-60% to drastically improve pacing, while keeping 100% of the technical value.
+    
+    Original Script:
+    "{full_script}"
+    
+    Output STRICT JSON:
+    "original_word_count" (int),
+    "compressed_word_count" (int),
+    "compression_ratio" (string),
+    "compressed_script" (string, the full rewritten script)
+    """
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2, # Low temp to prevent hallucinations and ensure strict adherence
             response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
@@ -432,10 +464,10 @@ with st.sidebar:
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
-    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description\n- Hook Builder & Storyboard\n- A/B Comparator")
+    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description\n- Hook Builder & Storyboard\n- Script Compressor\n- A/B Comparator")
 
 # INPUT SECTION
-st.subheader("📥 Inputs")
+st.subheader(" Inputs")
 col_url, col_upload = st.columns(2)
 
 with col_url:
@@ -454,36 +486,35 @@ st.subheader("🎯 Content Niche Mode")
 niche_mode = st.selectbox("Select your channel type to calibrate scoring weights:", 
                           ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
 
-st.subheader("️ Thumbnail A/B Testing")
+st.subheader("🖼️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
-st.subheader("️ Your Description (For Analysis)")
+st.subheader("✍️ Your Description (For Analysis)")
 user_description = st.text_area("Paste YOUR existing description here to get it analyzed and scored", 
                                  height=100, 
                                  placeholder="Paste your current video description here...")
 
 # HOOK BUILDER INPUTS
 st.subheader("🎣 Hook Builder (Provide the Ingredients)")
-st.caption("Give the AI your specific data points. You can list 1 to 3 items per box. The AI will weave them into a viral Cold Open.")
+st.caption("Give the AI your specific data points. The AI will weave them into a viral Cold Open.")
 
 col_p, col_m, col_pay = st.columns(3)
 with col_p:
-    problem_input = st.text_area("The Problem (Pain points, bad stats, what fails)", 
-                                 height=100, 
-                                 placeholder="- Most backtests hide 15% drawdowns\n- Lookahead bias ruins EMA crossovers")
+    problem_input = st.text_area("The Problem (Pain points, bad stats)", height=100)
 with col_m:
-    mechanism_input = st.text_area("The Mechanism (Your specific solution/method)", 
-                                   height=100, 
-                                   placeholder="- 70/30 Walk-forward split\n- 0.05% slippage model\n- ADX regime filter")
+    mechanism_input = st.text_area("The Mechanism (Your specific solution)", height=100)
 with col_pay:
-    payoff_input = st.text_area("The Payoff (The result/deliverable)", 
-                                height=100, 
-                                placeholder="- Sharpe ratio of 0.82\n- Exact Python validation framework")
+    payoff_input = st.text_area("The Payoff (The result/deliverable)", height=100)
+
+# SCRIPT COMPRESSOR INPUT
+st.subheader("✂️ Full Script Compressor")
+st.caption("Paste your full script here. The AI will compress the pacing by 40-60% without losing technical details.")
+full_script_input = st.text_area("Paste your full script here...", height=200)
 
 # BUTTONS
 col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
 with col_btn1:
-    run_analysis = st.button(" Full Analysis", type="primary", use_container_width=True)
+    run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
 with col_btn2:
     quick_thumb = st.button("🎨 Thumbnail Brief Only", use_container_width=True)
 with col_btn3:
@@ -494,8 +525,8 @@ if run_analysis or quick_thumb or seo_only:
         st.error("Please enter a video title.")
     elif not topic_input and not quick_thumb:
         st.error("Please enter the main topic.")
-    elif not url_input and not uploaded_file and not new_thumb_file and not seo_only and not problem_input:
-        st.error("Please provide at least one input (URL, Video, Description, or Hook Builder).")
+    elif not url_input and not uploaded_file and not new_thumb_file and not seo_only and not problem_input and not full_script_input:
+        st.error("Please provide at least one input.")
     else:
         mode_name = niche_mode.split(" ")[0] 
         
@@ -520,8 +551,29 @@ if run_analysis or quick_thumb or seo_only:
                 with open(new_thumb_path, "wb") as f:
                     f.write(new_thumb_file.getbuffer())
 
-        final_transcript = transcript # Fallback for description analyzer
+        final_transcript = transcript 
         
+        # === SCRIPT COMPRESSOR ===
+        if full_script_input:
+            st.markdown("---")
+            st.subheader("✂️ Script Pacing Compressor")
+            
+            with st.spinner("Ruthlessly editing your script for pacing..."):
+                compression_data = compress_script_with_llm(full_script_input)
+            
+            if "error" in compression_data:
+                st.error(compression_data["error"])
+            else:
+                col_w1, col_w2, col_w3 = st.columns(3)
+                col_w1.metric("Original Words", compression_data.get('original_word_count', 0))
+                col_w2.metric("Compressed Words", compression_data.get('compressed_word_count', 0))
+                col_w3.metric("Time Saved", f"~{compression_data.get('compression_ratio', '0%')}")
+                
+                st.markdown("### 📜 Compressed Script (Copy-Paste Ready)")
+                st.text_area("Compressed Version", value=compression_data.get('compressed_script', ''), height=400, key="compressed_script_display")
+                
+                st.info("💡 **Pro Tip:** Read this compressed version out loud with a stopwatch. It should take 40-60% less time than your original draft while retaining 100% of the technical authority!")
+
         # === USER DESCRIPTION ANALYZER ===
         if user_description and (run_analysis or seo_only):
             st.markdown("---")
@@ -541,7 +593,6 @@ if run_analysis or quick_thumb or seo_only:
                 
                 st.markdown("### ✅ Description Checklist:")
                 check_col1, check_col2, check_col3 = st.columns(3)
-                
                 with check_col1:
                     if user_analysis.get('has_cta'): st.success("✅ Has CTA")
                     else: st.error("❌ Missing CTA")
@@ -550,7 +601,7 @@ if run_analysis or quick_thumb or seo_only:
                     else: st.error("❌ Missing Keywords")
                 with check_col3:
                     if user_analysis.get('has_timestamps_placeholder'): st.success("✅ Has Timestamps")
-                    else: st.warning("️ No Timestamps")
+                    else: st.warning("⚠️ No Timestamps")
                 
                 st.markdown("---")
                 col_a1, col_a2 = st.columns(2)
@@ -564,8 +615,6 @@ if run_analysis or quick_thumb or seo_only:
                 st.markdown("### 🎯 Specific Improvements:")
                 for improvement in user_analysis.get('improvements', []): st.info(f"→ {improvement}")
                 
-                st.markdown(f"**Keyword Density:** {user_analysis.get('keyword_density', 'N/A')}")
-                
                 st.markdown("---")
                 st.subheader("🔄 Comparison: Your Description vs AI-Optimized")
                 with st.spinner("Generating AI-optimized version..."):
@@ -576,44 +625,32 @@ if run_analysis or quick_thumb or seo_only:
                     with col_user:
                         st.markdown("#### Your Description")
                         st.text_area("Your Version", value=user_description, height=300, disabled=True, key="user_desc_display")
-                        st.caption(f"Score: {user_analysis.get('seo_score', 0)}/100")
                     with col_ai:
                         st.markdown("#### AI-Optimized Version")
                         st.text_area("AI Version", value=ai_seo.get('full_description', ''), height=300, disabled=True, key="ai_desc_display")
-                        st.caption(f"Score: {ai_seo.get('seo_score', 0)}/100")
                     
                     st.markdown("---")
-                    st.markdown("### ️ Recommended Tags (Copy-Paste Ready)")
+                    st.markdown("### 🏷️ Recommended Tags (Copy-Paste Ready)")
                     st.code(", ".join(ai_seo.get('tags', [])), language="text")
-                    st.markdown("### #️⃣ Hashtags")
-                    st.write(" ".join(ai_seo.get('hashtags', [])))
 
-        # === SEO GENERATOR (if no user description provided) ===
+        # === SEO GENERATOR ===
         elif title_input and (run_analysis or seo_only) and not user_description:
             st.markdown("---")
             st.subheader("📝 SEO Description & Tags Generator")
             with st.spinner("Generating SEO-optimized description..."):
                 seo_data = generate_seo_description_and_tags(title_input, final_transcript, topic_input)
-            
-            if "error" in seo_data:
-                st.error(seo_data["error"])
-            else:
+            if "error" not in seo_data:
                 st.metric("SEO Optimization Score", f"{seo_data.get('seo_score', 0)}/100")
-                st.markdown("### 📄 Video Description (Copy-Paste Ready)")
                 st.text_area("Complete Description", value=seo_data.get('full_description', ''), height=300, key="desc_copy")
-                st.markdown("### 🏷️ Optimized Tags (15 Tags)")
                 st.code(", ".join(seo_data.get('tags', [])), language="text")
-                st.markdown("### #️⃣ Recommended Hashtags")
-                st.write(" ".join(seo_data.get('hashtags', [])))
 
         # === THUMBNAIL A/B COMPARATOR ===
         if not seo_only:
             st.markdown("---")
-            st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
+            st.subheader(f"️ Thumbnail A/B Comparator ({mode_name} Mode)")
             
             orig_metrics = None
             new_metrics = None
-            
             if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name)
             if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
 
@@ -623,23 +660,18 @@ if run_analysis or quick_thumb or seo_only:
                     st.markdown("#### 🅰️ Original Thumbnail")
                     st.image(thumb_path, use_column_width=True)
                     st.metric("Score", f"{orig_metrics['score']}/100")
-                    st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']}")
                 with col_new:
-                    st.markdown("#### ️ New/AI Thumbnail")
+                    st.markdown("#### 🅱️ New/AI Thumbnail")
                     st.image(new_thumb_path, use_column_width=True)
                     score_delta = new_metrics['score'] - orig_metrics['score']
                     st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
-                    st.write(f"Info Density: {new_metrics['info_density']} | Contrast: {new_metrics['contrast']}")
                 
-                st.markdown("---")
-                if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** It scores {score_delta} points higher.")
-                elif score_delta < -5: st.error(f"⚠️ **Winner: Original Thumbnail.** Dropped by {abs(score_delta)} points.")
+                if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
+                elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
                 else: st.info(f"⚖️ **Tie Game.** Statistically similar.")
             elif orig_metrics:
-                st.markdown("#### ️ Original Thumbnail Analysis")
                 st.image(thumb_path, use_column_width=True)
                 st.metric("Score", f"{orig_metrics['score']}/100")
-                st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']} | Sharpness: {orig_metrics['sharpness']}")
 
             if not quick_thumb:
                 if title_input:
@@ -648,10 +680,6 @@ if run_analysis or quick_thumb or seo_only:
                     with st.spinner("Analyzing title..."):
                         title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input)
                     if "error" not in title_analysis:
-                        col_t1, col_t2, col_t3 = st.columns(3)
-                        col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100")
-                        col_t2.metric("Characters", title_analysis.get('character_count', 0))
-                        col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
                         st.markdown("**Alternative Titles:**")
                         for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1): st.info(f"**{i}.** {alt}")
 
@@ -661,14 +689,8 @@ if run_analysis or quick_thumb or seo_only:
                     with st.spinner("Generating brief..."):
                         thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input)
                     if "error" not in thumb_brief:
-                        st.metric("Predicted CTR Score", f"{thumb_brief.get('thumbnail_score_prediction', 0)}/100")
-                        col_b1, col_b2 = st.columns(2)
-                        with col_b1:
-                            st.markdown(f"**Text:** {thumb_brief.get('thumbnail_text')}")
-                            st.markdown(f"**Colors:** {thumb_brief.get('color_scheme')}")
-                        with col_b2:
-                            st.markdown("**Midjourney Prompt:**")
-                            st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
+                        st.markdown("**Midjourney Prompt:**")
+                        st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
 
                 if video_path and os.path.exists(video_path):
                     st.markdown("---")
@@ -679,57 +701,32 @@ if run_analysis or quick_thumb or seo_only:
                     if "error" not in vid_metrics:
                         cpm = vid_metrics["cpm"]
                         st.metric("Visual Pacing", f"{cpm} Cuts/Min")
-                        if cpm < 10: st.success("✅ Good for Technical Content")
-                        elif cpm < 20: st.success("✅ Excellent Pacing")
-                        else: st.warning("⚠️ Very Fast")
 
                     with st.spinner("Detecting boring signals..."):
                         boring_metrics = detect_boring_signals(video_path)
                     if "error" not in boring_metrics:
                         st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
-                        if boring_metrics['is_boring']: st.error("🚨 BORING - Add B-roll, zoom cuts, or screen recordings!")
+                        if boring_metrics['is_boring']: st.error(" BORING - Add visual variety!")
                         else: st.success("✅ ENGAGING - Good visual dynamics.")
 
                     # === HOOK BUILDER & STORYBOARD ===
                     if problem_input or mechanism_input or payoff_input:
                         st.markdown("---")
                         st.subheader("🎣 AI Hook Builder & Visual Storyboard")
-                        
                         with st.spinner("Weaving your ingredients into a Cold Open script..."):
                             llm_data = analyze_script_with_llm(problem_input, mechanism_input, payoff_input, cpm)
                         
                         if "error" not in llm_data:
-                            s1, s2, s3 = st.columns(3)
-                            s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
-                            s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
-                            s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
-                            
-                            hook_score = llm_data.get("overall_hook_score", 0)
-                            st.progress(min(hook_score, 100) / 100)
-                            st.caption(f"Overall Hook Score: {hook_score}/100")
-                            
-                            st.info(f"**AI Critique:** {llm_data.get('critique')}")
-                            
-                            st.markdown("### ️ The Rewritten Cold Open Script")
                             st.success(llm_data.get('script_rewrite', 'N/A'))
-                            
-                            # === VISUAL STORYBOARD UI ===
                             storyboard = llm_data.get('visual_storyboard', [])
                             if storyboard:
-                                st.markdown("---")
-                                st.subheader(" Visual Storyboard (What to Show)")
-                                st.caption("Follow this second-by-second blueprint to fix your Boring Score.")
-                                
+                                st.markdown("### 🎬 Visual Storyboard")
                                 for shot in storyboard:
                                     st.markdown(f"**⏱️ {shot.get('time', 'N/A')}**")
                                     col_v, col_a = st.columns([1, 2])
-                                    with col_v:
-                                        st.markdown(f"**👁️ Visual Action:**\n{shot.get('visual_action')}")
-                                    with col_a:
-                                        st.markdown(f"**🗣️ Audio Line:**\n{shot.get('audio_line')}")
+                                    with col_v: st.markdown(f"**👁️ Visual:**\n{shot.get('visual_action')}")
+                                    with col_a: st.markdown(f"**🗣️ Audio:**\n{shot.get('audio_line')}")
                                     st.divider()
-                    else:
-                        st.info(" **Pro Tip:** Fill out the 'Hook Builder' boxes above to generate a custom Cold Open script and Visual Storyboard!")
 
         for f in [thumb_path, video_path, new_thumb_path]:
             if f and os.path.exists(f):
