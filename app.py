@@ -54,10 +54,6 @@ def fetch_thumbnail_and_transcript(url):
     return thumb_path, transcript_text[:1500], None
 
 def analyze_thumbnail(image_path, niche_mode="Technical"):
-    """
-    Niche-Aware Thumbnail Scoring Engine.
-    Modes: Technical, Finance, Entertainment
-    """
     if not image_path or not os.path.exists(image_path):
         return {"error": "Could not load thumbnail"}
 
@@ -75,7 +71,6 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
         img = img[y:y+h, x:x+w]
         gray = gray[y:y+h, x:x+w]
 
-    # 1. BASE METRICS
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     l_channel, _, _ = cv2.split(lab)
     contrast_score = float(np.std(l_channel))
@@ -84,12 +79,9 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
     b, g, r = cv2.split(img)
     vibrancy = float(np.mean([np.std(b), np.std(g), np.std(r)]))
 
-    # 2. INFORMATION DENSITY (Proxy for Text/Charts/Code via Edge Detection)
-    # Technical thumbnails have high edge density due to text and UI elements
     edges = cv2.Canny(gray, 50, 150)
     edge_density = float(np.count_nonzero(edges) / (gray.shape[0] * gray.shape[1])) * 100
 
-    # 3. FACE DETECTION
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
     face_count = len(faces)
     
@@ -103,12 +95,10 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
         if 0.2 < face_center_x < 0.8 and 0.2 < face_center_y < 0.8:
             face_centered = True
 
-    # 4. NICHE-SPECIFIC SCORING ALGORITHM
-    # Normalize metrics to 0-1 range
     c_norm = min(contrast_score / 50.0, 1.0)
     s_norm = min(sharpness_score / 2000.0, 1.0)
     v_norm = min(vibrancy / 60.0, 1.0)
-    e_norm = min(edge_density / 15.0, 1.0) # Cap edge density normalization
+    e_norm = min(edge_density / 15.0, 1.0)
     
     face_pts = 1.0 if face_count > 0 else 0.0
     center_pts = 1.0 if face_centered else 0.0
@@ -116,18 +106,10 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
     final_score = 0
     
     if niche_mode == "Technical":
-        # Technical: Info density is king. Faces are secondary.
-        # Weights: Contrast 20%, Sharpness 15%, Vibrancy 10%, Info Density 35%, Face 15%, Center 5%
         final_score = (c_norm * 20) + (s_norm * 15) + (v_norm * 10) + (e_norm * 35) + (face_pts * 15) + (center_pts * 5)
-        
     elif niche_mode == "Finance":
-        # Finance: Balanced. Trust (faces) + Data (info density).
-        # Weights: Contrast 20%, Sharpness 15%, Vibrancy 15%, Info Density 20%, Face 25%, Center 5%
         final_score = (c_norm * 20) + (s_norm * 15) + (v_norm * 15) + (e_norm * 20) + (face_pts * 25) + (center_pts * 5)
-        
-    else: # Entertainment
-        # Entertainment: Faces and Vibrancy are king.
-        # Weights: Contrast 20%, Sharpness 10%, Vibrancy 25%, Info Density 10%, Face 30%, Center 5%
+    else:
         final_score = (c_norm * 20) + (s_norm * 10) + (v_norm * 25) + (e_norm * 10) + (face_pts * 30) + (center_pts * 5)
 
     final_score = int(round(max(0, min(100, final_score))))
@@ -237,7 +219,7 @@ def detect_boring_signals(video_path):
             "stagnation_rate": round(stagnation_rate, 1),
             "avg_motion": round(avg_motion, 2),
             "is_boring": is_boring,
-            "verdict": "️ BORING - Add visual variety" if is_boring else "✅ ENGAGING - Good visual dynamics"
+            "verdict": "⚠️ BORING - Add visual variety" if is_boring else "✅ ENGAGING - Good visual dynamics"
         }
     except Exception as e:
         return {"error": f"Analysis failed: {str(e)[:100]}"}
@@ -306,6 +288,50 @@ def generate_thumbnail_brief(title, transcript, topic):
     except Exception as e:
         return {"error": str(e)}
 
+def generate_seo_description_and_tags(title, transcript, topic):
+    """Generate SEO-optimized description and tags"""
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    client = Groq(api_key=api_key)
+    
+    prompt = f"""
+    You are a YouTube SEO expert specializing in technical/finance content.
+    
+    Video Title: "{title}"
+    Topic: {topic}
+    Transcript: "{transcript[:500]}"
+    
+    Generate:
+    1. A compelling 2-3 sentence description hook (first 150 characters are critical for SEO)
+    2. Full description with:
+       - Natural keyword integration
+       - What viewers will learn
+       - Call-to-action
+       - Placeholder for timestamps
+       - Placeholder for links/resources
+    3. 15 highly-targeted tags (mix of high-volume and long-tail keywords)
+    4. 3-5 hashtags for the description
+    
+    Output STRICT JSON:
+    "description_hook" (string, 150 chars max),
+    "full_description" (string, complete formatted description),
+    "tags" (array of exactly 15 strings),
+    "hashtags" (array of 3-5 strings),
+    "primary_keywords" (array of 5 strings),
+    "seo_score" (int 0-100)
+    """
+    
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            response_format={"type": "json_object"}
+        )
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
+
 def analyze_script_with_llm(transcript, cpm):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
@@ -343,9 +369,8 @@ with st.sidebar:
     st.header("⚙️ Settings")
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
-    
     st.markdown("---")
-    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- A/B Comparator")
+    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description & Tags\n- A/B Comparator")
 
 # INPUT SECTION
 st.subheader("📥 Inputs")
@@ -363,7 +388,6 @@ with col_title:
 with col_topic:
     topic_input = st.text_input("4. Main Topic/Keyword", placeholder="e.g., Bitcoin backtesting, Python algo")
 
-# NICHE SELECTOR
 st.subheader("🎯 Content Niche Mode")
 niche_mode = st.selectbox("Select your channel type to calibrate scoring weights:", 
                           ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
@@ -375,21 +399,22 @@ st.subheader("📝 Transcript (Optional)")
 manual_transcript = st.text_area("Paste hook script if auto-fetch fails", height=80)
 
 # BUTTONS
-col_btn1, col_btn2 = st.columns([3, 1])
+col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
 with col_btn1:
-    run_analysis = st.button(" Full Analysis", type="primary", use_container_width=True)
+    run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
 with col_btn2:
     quick_thumb = st.button("🎨 Thumbnail Brief Only", use_container_width=True)
+with col_btn3:
+    seo_only = st.button("📝 SEO Only", use_container_width=True)
 
-if run_analysis or quick_thumb:
+if run_analysis or quick_thumb or seo_only:
     if not title_input and not quick_thumb:
         st.error("Please enter a video title.")
     elif not topic_input and not quick_thumb:
         st.error("Please enter the main topic.")
-    elif not url_input and not uploaded_file and not manual_transcript and not new_thumb_file:
+    elif not url_input and not uploaded_file and not manual_transcript and not new_thumb_file and not seo_only:
         st.error("Please provide at least one input.")
     else:
-        # Extract just the mode name for the function
         mode_name = niche_mode.split(" ")[0] 
         
         with st.spinner("Processing..."):
@@ -415,131 +440,178 @@ if run_analysis or quick_thumb:
 
         final_transcript = manual_transcript if manual_transcript else transcript
         
-        # === THUMBNAIL A/B COMPARATOR (NICHE AWARE) ===
-        st.markdown("---")
-        st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
-        
-        orig_metrics = None
-        new_metrics = None
-        
-        if thumb_path and os.path.exists(thumb_path):
-            orig_metrics = analyze_thumbnail(thumb_path, mode_name)
-        if new_thumb_path and os.path.exists(new_thumb_path):
-            new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
-
-        if orig_metrics and new_metrics:
-            col_orig, col_new = st.columns(2)
+        # === SEO DESCRIPTION & TAGS GENERATOR ===
+        if title_input and (run_analysis or seo_only):
+            st.markdown("---")
+            st.subheader("📝 SEO Description & Tags Generator")
             
-            with col_orig:
-                st.markdown("#### 🅰️ Original Thumbnail")
+            with st.spinner("Generating SEO-optimized description and tags..."):
+                seo_data = generate_seo_description_and_tags(title_input, final_transcript, topic_input)
+            
+            if "error" in seo_data:
+                st.error(seo_data["error"])
+            else:
+                # SEO Score
+                seo_score = seo_data.get('seo_score', 0)
+                st.metric("SEO Optimization Score", f"{seo_score}/100")
+                
+                # Description
+                st.markdown("### 📄 Video Description (Copy-Paste Ready)")
+                
+                full_desc = seo_data.get('full_description', '')
+                st.text_area("Complete Description", value=full_desc, height=300, key="desc_copy")
+                
+                st.info("💡 **Pro Tip:** Copy the description above and paste it directly into YouTube. Remember to fill in your actual timestamps and links!")
+                
+                # Tags
+                st.markdown("### 🏷️ Optimized Tags (15 Tags)")
+                tags = seo_data.get('tags', [])
+                
+                # Display tags in a copy-friendly format
+                tags_string = ", ".join(tags)
+                st.code(tags_string, language="text")
+                
+                st.markdown("**Individual Tags:**")
+                tag_cols = st.columns(3)
+                for i, tag in enumerate(tags):
+                    with tag_cols[i % 3]:
+                        st.text(f"• {tag}")
+                
+                # Hashtags
+                st.markdown("### #️⃣ Recommended Hashtags")
+                hashtags = seo_data.get('hashtags', [])
+                st.write(" ".join(hashtags))
+                
+                # Primary Keywords
+                st.markdown("### 🔑 Primary Keywords Targeted")
+                keywords = seo_data.get('primary_keywords', [])
+                for kw in keywords:
+                    st.write(f"✅ {kw}")
+
+        # === THUMBNAIL A/B COMPARATOR ===
+        if not seo_only:
+            st.markdown("---")
+            st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
+            
+            orig_metrics = None
+            new_metrics = None
+            
+            if thumb_path and os.path.exists(thumb_path):
+                orig_metrics = analyze_thumbnail(thumb_path, mode_name)
+            if new_thumb_path and os.path.exists(new_thumb_path):
+                new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
+
+            if orig_metrics and new_metrics:
+                col_orig, col_new = st.columns(2)
+                
+                with col_orig:
+                    st.markdown("#### 🅰️ Original Thumbnail")
+                    st.image(thumb_path, use_column_width=True)
+                    st.metric("Score", f"{orig_metrics['score']}/100")
+                    st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']}")
+                    st.write(f"Faces: {orig_metrics['faces']}")
+                    
+                with col_new:
+                    st.markdown("#### 🅱️ New/AI Thumbnail")
+                    st.image(new_thumb_path, use_column_width=True)
+                    
+                    score_delta = new_metrics['score'] - orig_metrics['score']
+                    
+                    st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
+                    st.write(f"Info Density: {new_metrics['info_density']} | Contrast: {new_metrics['contrast']}")
+                    st.write(f"Faces: {new_metrics['faces']}")
+                    
+                st.markdown("---")
+                if score_delta > 5:
+                    st.success(f"🏆 **Winner: New Thumbnail!** It scores {score_delta} points higher in {mode_name} mode.")
+                elif score_delta < -5:
+                    st.error(f"⚠️ **Winner: Original Thumbnail.** The new one dropped by {abs(score_delta)} points.")
+                else:
+                    st.info(f"⚖️ **Tie Game.** Both thumbnails are statistically similar for this niche.")
+                    
+            elif orig_metrics:
+                st.markdown("#### 🅰️ Original Thumbnail Analysis")
                 st.image(thumb_path, use_column_width=True)
                 st.metric("Score", f"{orig_metrics['score']}/100")
-                st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']}")
+                st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']} | Sharpness: {orig_metrics['sharpness']}")
                 st.write(f"Faces: {orig_metrics['faces']}")
-                
-            with col_new:
-                st.markdown("#### ️ New/AI Thumbnail")
+            elif new_metrics:
+                st.markdown("#### 🅱️ New Thumbnail Analysis")
                 st.image(new_thumb_path, use_column_width=True)
-                
-                score_delta = new_metrics['score'] - orig_metrics['score']
-                
-                st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
-                st.write(f"Info Density: {new_metrics['info_density']} | Contrast: {new_metrics['contrast']}")
+                st.metric("Score", f"{new_metrics['score']}/100")
+                st.write(f"Info Density: {new_metrics['info_density']} | Contrast: {new_metrics['contrast']} | Sharpness: {new_metrics['sharpness']}")
                 st.write(f"Faces: {new_metrics['faces']}")
-                
-            st.markdown("---")
-            if score_delta > 5:
-                st.success(f"🏆 **Winner: New Thumbnail!** It scores {score_delta} points higher in {mode_name} mode.")
-            elif score_delta < -5:
-                st.error(f"⚠️ **Winner: Original Thumbnail.** The new one dropped by {abs(score_delta)} points.")
-            else:
-                st.info(f"⚖️ **Tie Game.** Both thumbnails are statistically similar for this niche.")
-                
-        elif orig_metrics:
-            st.markdown("#### 🅰️ Original Thumbnail Analysis")
-            st.image(thumb_path, use_column_width=True)
-            st.metric("Score", f"{orig_metrics['score']}/100")
-            st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']} | Sharpness: {orig_metrics['sharpness']}")
-            st.write(f"Faces: {orig_metrics['faces']}")
-        elif new_metrics:
-            st.markdown("#### ️ New Thumbnail Analysis")
-            st.image(new_thumb_path, use_column_width=True)
-            st.metric("Score", f"{new_metrics['score']}/100")
-            st.write(f"Info Density: {new_metrics['info_density']} | Contrast: {new_metrics['contrast']} | Sharpness: {new_metrics['sharpness']}")
-            st.write(f"Faces: {new_metrics['faces']}")
-        else:
-            st.info("Upload an Original (via URL) or New Thumbnail to see metrics.")
 
-        if not quick_thumb:
-            # === TITLE OPTIMIZATION ===
-            if title_input:
-                st.markdown("---")
-                st.subheader("📝 Title Optimization")
-                with st.spinner("Analyzing title..."):
-                    title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input)
-                
-                if "error" not in title_analysis:
-                    col_t1, col_t2, col_t3 = st.columns(3)
-                    col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100")
-                    col_t2.metric("Characters", title_analysis.get('character_count', 0))
-                    col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
+            if not quick_thumb:
+                # === TITLE OPTIMIZATION ===
+                if title_input:
+                    st.markdown("---")
+                    st.subheader("📝 Title Optimization")
+                    with st.spinner("Analyzing title..."):
+                        title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input)
                     
-                    st.markdown("**Alternative Titles:**")
-                    for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1):
-                        st.info(f"**{i}.** {alt}")
+                    if "error" not in title_analysis:
+                        col_t1, col_t2, col_t3 = st.columns(3)
+                        col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100")
+                        col_t2.metric("Characters", title_analysis.get('character_count', 0))
+                        col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
+                        
+                        st.markdown("**Alternative Titles:**")
+                        for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1):
+                            st.info(f"**{i}.** {alt}")
 
-            # === THUMBNAIL BRIEF ===
-            if title_input:
-                st.markdown("---")
-                st.subheader("🎨 AI Thumbnail Brief & Prompt")
-                with st.spinner("Generating brief..."):
-                    thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input)
-                
-                if "error" not in thumb_brief:
-                    st.metric("Predicted CTR Score", f"{thumb_brief.get('thumbnail_score_prediction', 0)}/100")
-                    col_b1, col_b2 = st.columns(2)
-                    with col_b1:
-                        st.markdown(f"**Text:** {thumb_brief.get('thumbnail_text')}")
-                        st.markdown(f"**Colors:** {thumb_brief.get('color_scheme')}")
-                        st.markdown(f"**Layout:** {thumb_brief.get('layout')}")
-                    with col_b2:
-                        st.markdown("**Midjourney Prompt:**")
-                        st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
+                # === THUMBNAIL BRIEF ===
+                if title_input:
+                    st.markdown("---")
+                    st.subheader("🎨 AI Thumbnail Brief & Prompt")
+                    with st.spinner("Generating brief..."):
+                        thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input)
+                    
+                    if "error" not in thumb_brief:
+                        st.metric("Predicted CTR Score", f"{thumb_brief.get('thumbnail_score_prediction', 0)}/100")
+                        col_b1, col_b2 = st.columns(2)
+                        with col_b1:
+                            st.markdown(f"**Text:** {thumb_brief.get('thumbnail_text')}")
+                            st.markdown(f"**Colors:** {thumb_brief.get('color_scheme')}")
+                            st.markdown(f"**Layout:** {thumb_brief.get('layout')}")
+                        with col_b2:
+                            st.markdown("**Midjourney Prompt:**")
+                            st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
 
-            # === HOOK & BORING ANALYSIS ===
-            if video_path and os.path.exists(video_path):
-                st.markdown("---")
-                st.subheader("🎬 Hook & Retention Analysis")
-                
-                with st.spinner("Analyzing pacing..."):
-                    vid_metrics = analyze_hook_video(video_path)
-                if "error" not in vid_metrics:
-                    cpm = vid_metrics["cpm"]
-                    st.metric("Visual Pacing", f"{cpm} Cuts/Min")
-                    if cpm < 10: st.success("✅ Good for Technical Content")
-                    elif cpm < 20: st.success("✅ Excellent Pacing")
-                    else: st.warning("⚠️ Very Fast")
+                # === HOOK & BORING ANALYSIS ===
+                if video_path and os.path.exists(video_path):
+                    st.markdown("---")
+                    st.subheader("🎬 Hook & Retention Analysis")
+                    
+                    with st.spinner("Analyzing pacing..."):
+                        vid_metrics = analyze_hook_video(video_path)
+                    if "error" not in vid_metrics:
+                        cpm = vid_metrics["cpm"]
+                        st.metric("Visual Pacing", f"{cpm} Cuts/Min")
+                        if cpm < 10: st.success("✅ Good for Technical Content")
+                        elif cpm < 20: st.success("✅ Excellent Pacing")
+                        else: st.warning("⚠️ Very Fast")
 
-                with st.spinner("Detecting boring signals..."):
-                    boring_metrics = detect_boring_signals(video_path)
-                if "error" not in boring_metrics:
-                    st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
-                    if boring_metrics['is_boring']:
-                        st.error("🚨 BORING - Add B-roll, zoom cuts, or screen recordings!")
-                    else:
-                        st.success("✅ ENGAGING - Good visual dynamics.")
+                    with st.spinner("Detecting boring signals..."):
+                        boring_metrics = detect_boring_signals(video_path)
+                    if "error" not in boring_metrics:
+                        st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
+                        if boring_metrics['is_boring']:
+                            st.error("🚨 BORING - Add B-roll, zoom cuts, or screen recordings!")
+                        else:
+                            st.success("✅ ENGAGING - Good visual dynamics.")
 
-                # === SCRIPT ANALYSIS ===
-                if "GROQ_API_KEY" in st.secrets and final_transcript and final_transcript != "No transcript available.":
-                    with st.spinner("Running AI script analysis..."):
-                        llm_data = analyze_script_with_llm(final_transcript, cpm)
-                    if "error" not in llm_data:
-                        s1, s2, s3 = st.columns(3)
-                        s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
-                        s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
-                        s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
-                        st.info(f"**Critique:** {llm_data.get('critique')}")
-                        st.success(f"**Rewrite:** {llm_data.get('rewrite_suggestion')}")
+                    # === SCRIPT ANALYSIS ===
+                    if "GROQ_API_KEY" in st.secrets and final_transcript and final_transcript != "No transcript available.":
+                        with st.spinner("Running AI script analysis..."):
+                            llm_data = analyze_script_with_llm(final_transcript, cpm)
+                        if "error" not in llm_data:
+                            s1, s2, s3 = st.columns(3)
+                            s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
+                            s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
+                            s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
+                            st.info(f"**Critique:** {llm_data.get('critique')}")
+                            st.success(f"**Rewrite:** {llm_data.get('rewrite_suggestion')}")
 
         # Cleanup
         for f in [thumb_path, video_path, new_thumb_path]:
