@@ -217,7 +217,7 @@ def detect_boring_signals(video_path):
             "stagnation_rate": round(stagnation_rate, 1),
             "avg_motion": round(avg_motion, 2),
             "is_boring": is_boring,
-            "verdict": "⚠️ BORING - Add visual variety" if is_boring else "✅ ENGAGING - Good visual dynamics"
+            "verdict": "️ BORING - Add visual variety" if is_boring else "✅ ENGAGING - Good visual dynamics"
         }
     except Exception as e:
         return {"error": f"Analysis failed: {str(e)[:100]}"}
@@ -379,22 +379,29 @@ def analyze_user_description(user_desc, title, topic, transcript):
         return {"error": str(e)}
 
 def analyze_script_with_llm(transcript, cpm):
-    """Analyzes script and generates a Visual Storyboard"""
+    """Analyzes script and generates a Visual Storyboard with STRICT Cold Open rules"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     
     prompt = f"""
-    You are an expert YouTube Strategist and Visual Director for technical/quant channels.
+    You are an elite YouTube Strategist and Visual Director for top-tier technical/quant channels.
     Visual Pacing: {cpm} Cuts Per Minute.
-    Transcript (First 30s): "{transcript}"
+    Original Transcript (First 30s): "{transcript}"
     
     TASK:
     1. Evaluate the hook on Pattern Interrupt, Value Prop, and Jargon Density (1-10).
     2. Provide a punchy rewrite of the first 3 sentences.
     3. Generate a 'Visual Storyboard' for the first 30 seconds. 
-       - RULES FOR STORYBOARD: Do NOT suggest generic "B-roll". Suggest specific technical visuals: Code zooms, chart overlays, kinetic typography, digital punch-ins.
-       - Format: Break it into 3-4 distinct time blocks (e.g., 0:00-0:05).
+    
+    CRITICAL NEGATIVE CONSTRAINTS (DO NOT VIOLATE):
+    - NEVER start the audio with "Hi, welcome to my channel", "Hey guys", or "In this video". Start IMMEDIATELY with the problem, a bold claim, or the final result (Cold Open).
+    - NEVER suggest showing basic code imports (like `import pandas` or `import numpy`). Viewers know what these are. Show the *complex logic*, the *error*, the *backtest result*, or the *chart anomaly* instead.
+    - NEVER use marketing fluff like "revolutionize your trading", "dominate the markets", or "secret strategy". Speak like a Senior Quant Researcher.
+    
+    RULES FOR STORYBOARD VISUALS:
+    - Suggest specific technical visuals: Code zooms on complex logic, chart overlays with specific indicators, kinetic typography of exact metrics, digital punch-ins.
+    - Format: Break it into 3-4 distinct time blocks (e.g., 0:00-0:05).
     
     Output STRICT JSON:
     "pattern_interrupt_score" (int),
@@ -417,7 +424,7 @@ def analyze_script_with_llm(transcript, cpm):
         return {"error": str(e)}
 
 # --- UI ---
-st.title("📈 QuantTube Analyzer Pro")
+st.title(" QuantTube Analyzer Pro")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
 with st.sidebar:
@@ -428,7 +435,7 @@ with st.sidebar:
     st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description\n- Visual Storyboard\n- A/B Comparator")
 
 # INPUT SECTION
-st.subheader(" Inputs")
+st.subheader("📥 Inputs")
 col_url, col_upload = st.columns(2)
 
 with col_url:
@@ -525,7 +532,7 @@ if run_analysis or quick_thumb or seo_only:
                     else: st.error("❌ Missing CTA")
                 with check_col2:
                     if user_analysis.get('has_keywords'): st.success("✅ Has Keywords")
-                    else: st.error("❌ Missing Keywords")
+                    else: st.error(" Missing Keywords")
                 with check_col3:
                     if user_analysis.get('has_timestamps_placeholder'): st.success("✅ Has Timestamps")
                     else: st.warning("⚠️ No Timestamps")
@@ -539,13 +546,13 @@ if run_analysis or quick_thumb or seo_only:
                     st.markdown("### ⚠️ What's Missing:")
                     for weakness in user_analysis.get('weaknesses', []): st.error(f"✗ {weakness}")
                 
-                st.markdown("### 🎯 Specific Improvements:")
+                st.markdown("###  Specific Improvements:")
                 for improvement in user_analysis.get('improvements', []): st.info(f"→ {improvement}")
                 
                 st.markdown(f"**Keyword Density:** {user_analysis.get('keyword_density', 'N/A')}")
                 
                 st.markdown("---")
-                st.subheader(" Comparison: Your Description vs AI-Optimized")
+                st.subheader("🔄 Comparison: Your Description vs AI-Optimized")
                 with st.spinner("Generating AI-optimized version..."):
                     ai_seo = generate_seo_description_and_tags(title_input, final_transcript, topic_input)
                 
@@ -569,7 +576,7 @@ if run_analysis or quick_thumb or seo_only:
         # === SEO GENERATOR (if no user description provided) ===
         elif title_input and (run_analysis or seo_only) and not user_description:
             st.markdown("---")
-            st.subheader(" SEO Description & Tags Generator")
+            st.subheader("📝 SEO Description & Tags Generator")
             with st.spinner("Generating SEO-optimized description..."):
                 seo_data = generate_seo_description_and_tags(title_input, final_transcript, topic_input)
             
@@ -587,7 +594,7 @@ if run_analysis or quick_thumb or seo_only:
         # === THUMBNAIL A/B COMPARATOR ===
         if not seo_only:
             st.markdown("---")
-            st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
+            st.subheader(f"️ Thumbnail A/B Comparator ({mode_name} Mode)")
             
             orig_metrics = None
             new_metrics = None
@@ -603,7 +610,7 @@ if run_analysis or quick_thumb or seo_only:
                     st.metric("Score", f"{orig_metrics['score']}/100")
                     st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']}")
                 with col_new:
-                    st.markdown("#### 🅱️ New/AI Thumbnail")
+                    st.markdown("#### ️ New/AI Thumbnail")
                     st.image(new_thumb_path, use_column_width=True)
                     score_delta = new_metrics['score'] - orig_metrics['score']
                     st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
@@ -611,7 +618,7 @@ if run_analysis or quick_thumb or seo_only:
                 
                 st.markdown("---")
                 if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** It scores {score_delta} points higher.")
-                elif score_delta < -5: st.error(f"⚠️ **Winner: Original Thumbnail.** Dropped by {abs(score_delta)} points.")
+                elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** Dropped by {abs(score_delta)} points.")
                 else: st.info(f"⚖️ **Tie Game.** Statistically similar.")
             elif orig_metrics:
                 st.markdown("#### 🅰️ Original Thumbnail Analysis")
