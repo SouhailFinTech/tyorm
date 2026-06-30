@@ -51,7 +51,7 @@ def fetch_thumbnail_and_transcript(url):
     except Exception:
         thumb_path = None
 
-    return thumb_path, transcript_text[:1500], None
+    return thumb_path, transcript_text[:2000], None # Increased transcript length for better data extraction
 
 def analyze_thumbnail(image_path, niche_mode="Technical"):
     if not image_path or not os.path.exists(image_path):
@@ -63,7 +63,6 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
         
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # AUTO-CROP BLACK BARS
     _, thresh = cv2.threshold(gray, 15, 255, cv2.THRESH_BINARY)
     non_zero = cv2.findNonZero(thresh)
     if non_zero is not None:
@@ -104,7 +103,6 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
     center_pts = 1.0 if face_centered else 0.0
 
     final_score = 0
-    
     if niche_mode == "Technical":
         final_score = (c_norm * 20) + (s_norm * 15) + (v_norm * 10) + (e_norm * 35) + (face_pts * 15) + (center_pts * 5)
     elif niche_mode == "Finance":
@@ -289,34 +287,33 @@ def generate_thumbnail_brief(title, transcript, topic):
         return {"error": str(e)}
 
 def generate_seo_description_and_tags(title, transcript, topic):
-    """Generate SEO-optimized description and tags with a strict Quant persona"""
+    """Generate SEO-optimized description with strict YouTube formatting and data hooks"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     
     prompt = f"""
-    You are a Senior Quantitative Researcher and Elite YouTube Educator for institutional-level algorithmic trading.
+    You are a top 1% Quant YouTube Creator. Your goal is to write a description that outperforms a Senior Quant Researcher.
     
-    STRICT RULES:
-    1. ZERO marketing fluff. Do NOT use phrases like "take your trading to the next level", "secret strategy", "mind-blowing", or generic YouTube hype.
-    2. Be highly technical, clinical, and precise. Speak directly to Python developers, data scientists, and systematic traders.
-    3. Focus on methodology, mathematical rigor, and code implementation.
-    4. Structure the description exactly like a professional research abstract mixed with a high-value tutorial outline.
+    CRITICAL RULES:
+    1. NO HTML TAGS. Use ONLY Markdown (## for headers, - for bullets, ** for bold). YouTube does not render HTML.
+    2. THE "ABOVE THE FOLD" RULE: The first 120 characters are the ONLY thing viewers see before clicking "Show more". Start IMMEDIATELY with a hard-hitting technical fact, a specific number, or a bold claim. Do NOT start with "This tutorial presents..." or "In this video...".
+    3. DATA SPECIFICITY: Extract exact numbers from the transcript (e.g., '0.05% slippage', '70/30 splits', 'Sharpe 0.82'). Generic terms like 'realistic costs' are forbidden.
     
     Video Title: "{title}"
     Topic: {topic}
-    Transcript Snippet: "{transcript[:500]}"
+    Transcript: "{transcript[:1500]}"
     
     Generate:
-    1. A technical hook (2 sentences max) stating the exact mathematical/programmatic problem being solved.
-    2. A 'What we cover:' section with 4-5 bullet points detailing the specific concepts (e.g., walk-forward splits, slippage modeling, regime filters).
-    3. A 'Metrics analyzed:' section listing the exact performance metrics shown.
-    4. A professional CTA (e.g., "Comment [KEYWORD] for the GitHub repo").
-    5. 15 highly technical tags (e.g., 'Walk-Forward Optimization', 'Lookahead Bias', 'Regime Detection'). NO generic tags like 'make money'.
+    1. A 120-character hook packed with specific data.
+    2. A ## What we cover: section with 4-5 bullet points using specific technical examples.
+    3. A ## Metrics analyzed: section.
+    4. A professional CTA.
+    5. 15 highly technical tags.
     
     Output STRICT JSON:
     "description_hook" (string),
-    "full_description" (string, complete formatted description),
+    "full_description" (string, complete formatted description using Markdown),
     "tags" (array of exactly 15 strings),
     "hashtags" (array of 3-5 strings),
     "primary_keywords" (array of 5 strings),
@@ -335,13 +332,13 @@ def generate_seo_description_and_tags(title, transcript, topic):
         return {"error": str(e)}
 
 def analyze_user_description(user_desc, title, topic, transcript):
-    """Analyze and score user's own description with a Quant focus"""
+    """Analyze and score user's own description with a harsh, data-focused rubric"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     
     prompt = f"""
-    You are a Senior Quantitative Researcher evaluating a peer's YouTube video description.
+    You are a harsh YouTube Algorithm Expert evaluating a Quant video description.
     
     Video Title: "{title}"
     Topic: {topic}
@@ -350,15 +347,18 @@ def analyze_user_description(user_desc, title, topic, transcript):
     User's Description:
     "{user_desc}"
     
-    Evaluate this description based on TECHNICAL AUTHORITY and SEO, NOT marketing hype.
+    Evaluate based on these strict rules:
+    1. ABOVE THE FOLD (First 120 chars): Does it immediately hook the viewer with a hard fact or number? If it starts with "This tutorial..." or "In this video...", penalize it heavily.
+    2. DATA SPECIFICITY: Reward specific numbers (e.g., '0.05% slippage', 'Sharpe 0.82'). Penalize vague terms like 'realistic costs' or 'statistical significance'.
+    3. FORMATTING: Penalize HTML tags (<h2>, <ul>). Reward clean Markdown or plain text.
     
     Output STRICT JSON:
     "seo_score" (int 0-100),
     "character_count" (int),
     "is_optimal_length" (bool),
-    "strengths" (array of 3 strings focusing on technical depth and clarity),
-    "weaknesses" (array of 3 strings focusing on missing SEO elements like timestamps or links),
-    "improvements" (array of 3 strings on how to improve SEO without losing technical authority),
+    "strengths" (array of 3 strings),
+    "weaknesses" (array of 3 strings),
+    "improvements" (array of 3 strings),
     "keyword_density" (string),
     "readability_score" (int 0-100),
     "has_cta" (bool),
@@ -412,7 +412,7 @@ st.title("📈 QuantTube Analyzer Pro")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
 with st.sidebar:
-    st.header("️ Settings")
+    st.header("⚙️ Settings")
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
@@ -438,7 +438,7 @@ st.subheader("🎯 Content Niche Mode")
 niche_mode = st.selectbox("Select your channel type to calibrate scoring weights:", 
                           ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
 
-st.subheader("🖼️ Thumbnail A/B Testing")
+st.subheader("️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
 st.subheader("📝 Transcript (Optional)")
@@ -502,14 +502,12 @@ if run_analysis or quick_thumb or seo_only:
             if "error" in user_analysis:
                 st.error(user_analysis["error"])
             else:
-                # Overall Score
                 col_s1, col_s2, col_s3, col_s4 = st.columns(4)
                 col_s1.metric("SEO Score", f"{user_analysis.get('seo_score', 0)}/100")
                 col_s2.metric("Characters", user_analysis.get('character_count', 0))
                 col_s3.metric("Length", "✅ Optimal" if user_analysis.get('is_optimal_length') else "⚠️ Adjust")
                 col_s4.metric("Readability", f"{user_analysis.get('readability_score', 0)}/100")
                 
-                # Checklist (FIXED BUG)
                 st.markdown("### ✅ Description Checklist:")
                 check_col1, check_col2, check_col3 = st.columns(3)
                 
@@ -529,9 +527,8 @@ if run_analysis or quick_thumb or seo_only:
                     if user_analysis.get('has_timestamps_placeholder'):
                         st.success("✅ Has Timestamps")
                     else:
-                        st.warning("️ No Timestamps")
+                        st.warning("⚠️ No Timestamps")
                 
-                # Detailed Analysis
                 st.markdown("---")
                 col_a1, col_a2 = st.columns(2)
                 
@@ -541,7 +538,7 @@ if run_analysis or quick_thumb or seo_only:
                         st.success(f"✓ {strength}")
                 
                 with col_a2:
-                    st.markdown("### ️ What's Missing:")
+                    st.markdown("### ⚠️ What's Missing:")
                     for weakness in user_analysis.get('weaknesses', []):
                         st.error(f"✗ {weakness}")
                 
@@ -551,7 +548,6 @@ if run_analysis or quick_thumb or seo_only:
                 
                 st.markdown(f"**Keyword Density:** {user_analysis.get('keyword_density', 'N/A')}")
                 
-                # Generate AI version for comparison
                 st.markdown("---")
                 st.subheader("🔄 Comparison: Your Description vs AI-Optimized")
                 
@@ -571,7 +567,6 @@ if run_analysis or quick_thumb or seo_only:
                         st.text_area("AI Version", value=ai_seo.get('full_description', ''), height=300, disabled=True, key="ai_desc_display")
                         st.caption(f"Score: {ai_seo.get('seo_score', 0)}/100")
                     
-                    # Tags from AI
                     st.markdown("---")
                     st.markdown("### 🏷️ Recommended Tags (Copy-Paste Ready)")
                     tags_string = ", ".join(ai_seo.get('tags', []))
@@ -693,7 +688,7 @@ if run_analysis or quick_thumb or seo_only:
 
                 if video_path and os.path.exists(video_path):
                     st.markdown("---")
-                    st.subheader(" Hook & Retention Analysis")
+                    st.subheader("🎬 Hook & Retention Analysis")
                     
                     with st.spinner("Analyzing pacing..."):
                         vid_metrics = analyze_hook_video(video_path)
