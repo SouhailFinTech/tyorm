@@ -289,7 +289,6 @@ def generate_thumbnail_brief(title, transcript, topic):
         return {"error": str(e)}
 
 def generate_seo_description_and_tags(title, transcript, topic):
-    """Generate SEO-optimized description and tags"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
@@ -326,6 +325,56 @@ def generate_seo_description_and_tags(title, transcript, topic):
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
+            response_format={"type": "json_object"}
+        )
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
+
+def analyze_user_description(user_desc, title, topic, transcript):
+    """Analyze and score user's own description"""
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    client = Groq(api_key=api_key)
+    
+    prompt = f"""
+    You are a YouTube SEO expert analyzing a creator's video description.
+    
+    Video Title: "{title}"
+    Topic: {topic}
+    Transcript Snippet: "{transcript[:300]}"
+    
+    User's Description:
+    "{user_desc}"
+    
+    Analyze and provide:
+    1. SEO Score (0-100) based on: keyword usage, hook quality, length, CTA presence
+    2. Character count and optimal length check
+    3. What's working well (3 strengths)
+    4. What's missing (3 weaknesses)
+    5. Specific improvements to make
+    6. Keyword density analysis
+    7. Readability score
+    
+    Output STRICT JSON:
+    "seo_score" (int 0-100),
+    "character_count" (int),
+    "is_optimal_length" (bool),
+    "strengths" (array of 3 strings),
+    "weaknesses" (array of 3 strings),
+    "improvements" (array of 3 strings),
+    "keyword_density" (string),
+    "readability_score" (int 0-100),
+    "has_cta" (bool),
+    "has_keywords" (bool),
+    "has_timestamps_placeholder" (bool)
+    """
+    
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
             response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
@@ -370,7 +419,7 @@ with st.sidebar:
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
-    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description & Tags\n- A/B Comparator")
+    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description Generator\n- Your Description Analyzer\n- A/B Comparator")
 
 # INPUT SECTION
 st.subheader("📥 Inputs")
@@ -397,6 +446,11 @@ new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to 
 
 st.subheader("📝 Transcript (Optional)")
 manual_transcript = st.text_area("Paste hook script if auto-fetch fails", height=80)
+
+st.subheader("✍️ Your Description (For Analysis)")
+user_description = st.text_area("Paste YOUR existing description here to get it analyzed and scored", 
+                                 height=150, 
+                                 placeholder="Paste your current video description here to see how it compares to AI-optimized version...")
 
 # BUTTONS
 col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
@@ -440,8 +494,85 @@ if run_analysis or quick_thumb or seo_only:
 
         final_transcript = manual_transcript if manual_transcript else transcript
         
-        # === SEO DESCRIPTION & TAGS GENERATOR ===
-        if title_input and (run_analysis or seo_only):
+        # === USER DESCRIPTION ANALYZER ===
+        if user_description and (run_analysis or seo_only):
+            st.markdown("---")
+            st.subheader("📊 Your Description Analysis")
+            
+            with st.spinner("Analyzing your description..."):
+                user_analysis = analyze_user_description(user_description, title_input, topic_input, final_transcript)
+            
+            if "error" in user_analysis:
+                st.error(user_analysis["error"])
+            else:
+                # Overall Score
+                col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+                col_s1.metric("SEO Score", f"{user_analysis.get('seo_score', 0)}/100")
+                col_s2.metric("Characters", user_analysis.get('character_count', 0))
+                col_s3.metric("Length", "✅ Optimal" if user_analysis.get('is_optimal_length') else "⚠️ Adjust")
+                col_s4.metric("Readability", f"{user_analysis.get('readability_score', 0)}/100")
+                
+                # Checklist
+                st.markdown("### ✅ Description Checklist:")
+                check_col1, check_col2, check_col3 = st.columns(3)
+                with check_col1:
+                    st.success("✅ Has CTA") if user_analysis.get('has_cta') else st.error("❌ Missing CTA")
+                with check_col2:
+                    st.success("✅ Has Keywords") if user_analysis.get('has_keywords') else st.error("❌ Missing Keywords")
+                with check_col3:
+                    st.success("✅ Has Timestamps") if user_analysis.get('has_timestamps_placeholder') else st.warning("⚠️ No Timestamps")
+                
+                # Detailed Analysis
+                st.markdown("---")
+                col_a1, col_a2 = st.columns(2)
+                
+                with col_a1:
+                    st.markdown("### ✅ What's Working Well:")
+                    for strength in user_analysis.get('strengths', []):
+                        st.success(f"✓ {strength}")
+                
+                with col_a2:
+                    st.markdown("### ⚠️ What's Missing:")
+                    for weakness in user_analysis.get('weaknesses', []):
+                        st.error(f"✗ {weakness}")
+                
+                st.markdown("### 🎯 Specific Improvements:")
+                for improvement in user_analysis.get('improvements', []):
+                    st.info(f"→ {improvement}")
+                
+                st.markdown(f"**Keyword Density:** {user_analysis.get('keyword_density', 'N/A')}")
+                
+                # Generate AI version for comparison
+                st.markdown("---")
+                st.subheader("🔄 Comparison: Your Description vs AI-Optimized")
+                
+                with st.spinner("Generating AI-optimized version for comparison..."):
+                    ai_seo = generate_seo_description_and_tags(title_input, final_transcript, topic_input)
+                
+                if "error" not in ai_seo:
+                    col_user, col_ai = st.columns(2)
+                    
+                    with col_user:
+                        st.markdown("#### Your Description")
+                        st.text_area("Your Version", value=user_description, height=300, disabled=True, key="user_desc_display")
+                        st.caption(f"Score: {user_analysis.get('seo_score', 0)}/100")
+                    
+                    with col_ai:
+                        st.markdown("#### AI-Optimized Version")
+                        st.text_area("AI Version", value=ai_seo.get('full_description', ''), height=300, disabled=True, key="ai_desc_display")
+                        st.caption(f"Score: {ai_seo.get('seo_score', 0)}/100")
+                    
+                    # Tags from AI
+                    st.markdown("---")
+                    st.markdown("### 🏷️ Recommended Tags (Copy-Paste Ready)")
+                    tags_string = ", ".join(ai_seo.get('tags', []))
+                    st.code(tags_string, language="text")
+                    
+                    st.markdown("### #️⃣ Hashtags")
+                    st.write(" ".join(ai_seo.get('hashtags', [])))
+
+        # === SEO GENERATOR (if no user description provided) ===
+        elif title_input and (run_analysis or seo_only) and not user_description:
             st.markdown("---")
             st.subheader("📝 SEO Description & Tags Generator")
             
@@ -451,42 +582,23 @@ if run_analysis or quick_thumb or seo_only:
             if "error" in seo_data:
                 st.error(seo_data["error"])
             else:
-                # SEO Score
                 seo_score = seo_data.get('seo_score', 0)
                 st.metric("SEO Optimization Score", f"{seo_score}/100")
                 
-                # Description
                 st.markdown("### 📄 Video Description (Copy-Paste Ready)")
-                
                 full_desc = seo_data.get('full_description', '')
                 st.text_area("Complete Description", value=full_desc, height=300, key="desc_copy")
                 
                 st.info("💡 **Pro Tip:** Copy the description above and paste it directly into YouTube. Remember to fill in your actual timestamps and links!")
                 
-                # Tags
                 st.markdown("### 🏷️ Optimized Tags (15 Tags)")
                 tags = seo_data.get('tags', [])
-                
-                # Display tags in a copy-friendly format
                 tags_string = ", ".join(tags)
                 st.code(tags_string, language="text")
                 
-                st.markdown("**Individual Tags:**")
-                tag_cols = st.columns(3)
-                for i, tag in enumerate(tags):
-                    with tag_cols[i % 3]:
-                        st.text(f"• {tag}")
-                
-                # Hashtags
                 st.markdown("### #️⃣ Recommended Hashtags")
                 hashtags = seo_data.get('hashtags', [])
                 st.write(" ".join(hashtags))
-                
-                # Primary Keywords
-                st.markdown("### 🔑 Primary Keywords Targeted")
-                keywords = seo_data.get('primary_keywords', [])
-                for kw in keywords:
-                    st.write(f"✅ {kw}")
 
         # === THUMBNAIL A/B COMPARATOR ===
         if not seo_only:
@@ -535,15 +647,8 @@ if run_analysis or quick_thumb or seo_only:
                 st.metric("Score", f"{orig_metrics['score']}/100")
                 st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']} | Sharpness: {orig_metrics['sharpness']}")
                 st.write(f"Faces: {orig_metrics['faces']}")
-            elif new_metrics:
-                st.markdown("#### 🅱️ New Thumbnail Analysis")
-                st.image(new_thumb_path, use_column_width=True)
-                st.metric("Score", f"{new_metrics['score']}/100")
-                st.write(f"Info Density: {new_metrics['info_density']} | Contrast: {new_metrics['contrast']} | Sharpness: {new_metrics['sharpness']}")
-                st.write(f"Faces: {new_metrics['faces']}")
 
             if not quick_thumb:
-                # === TITLE OPTIMIZATION ===
                 if title_input:
                     st.markdown("---")
                     st.subheader("📝 Title Optimization")
@@ -560,7 +665,6 @@ if run_analysis or quick_thumb or seo_only:
                         for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1):
                             st.info(f"**{i}.** {alt}")
 
-                # === THUMBNAIL BRIEF ===
                 if title_input:
                     st.markdown("---")
                     st.subheader("🎨 AI Thumbnail Brief & Prompt")
@@ -578,7 +682,6 @@ if run_analysis or quick_thumb or seo_only:
                             st.markdown("**Midjourney Prompt:**")
                             st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
 
-                # === HOOK & BORING ANALYSIS ===
                 if video_path and os.path.exists(video_path):
                     st.markdown("---")
                     st.subheader("🎬 Hook & Retention Analysis")
@@ -601,7 +704,6 @@ if run_analysis or quick_thumb or seo_only:
                         else:
                             st.success("✅ ENGAGING - Good visual dynamics.")
 
-                    # === SCRIPT ANALYSIS ===
                     if "GROQ_API_KEY" in st.secrets and final_transcript and final_transcript != "No transcript available.":
                         with st.spinner("Running AI script analysis..."):
                             llm_data = analyze_script_with_llm(final_transcript, cpm)
@@ -613,7 +715,6 @@ if run_analysis or quick_thumb or seo_only:
                             st.info(f"**Critique:** {llm_data.get('critique')}")
                             st.success(f"**Rewrite:** {llm_data.get('rewrite_suggestion')}")
 
-        # Cleanup
         for f in [thumb_path, video_path, new_thumb_path]:
             if f and os.path.exists(f):
                 try: os.remove(f)
