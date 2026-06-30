@@ -53,7 +53,11 @@ def fetch_thumbnail_and_transcript(url):
 
     return thumb_path, transcript_text[:1500], None
 
-def analyze_thumbnail(image_path):
+def analyze_thumbnail(image_path, niche_mode="Technical"):
+    """
+    Niche-Aware Thumbnail Scoring Engine.
+    Modes: Technical, Finance, Entertainment
+    """
     if not image_path or not os.path.exists(image_path):
         return {"error": "Could not load thumbnail"}
 
@@ -71,11 +75,21 @@ def analyze_thumbnail(image_path):
         img = img[y:y+h, x:x+w]
         gray = gray[y:y+h, x:x+w]
 
+    # 1. BASE METRICS
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     l_channel, _, _ = cv2.split(lab)
     contrast_score = float(np.std(l_channel))
     sharpness_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
+    b, g, r = cv2.split(img)
+    vibrancy = float(np.mean([np.std(b), np.std(g), np.std(r)]))
+
+    # 2. INFORMATION DENSITY (Proxy for Text/Charts/Code via Edge Detection)
+    # Technical thumbnails have high edge density due to text and UI elements
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = float(np.count_nonzero(edges) / (gray.shape[0] * gray.shape[1])) * 100
+
+    # 3. FACE DETECTION
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
     face_count = len(faces)
     
@@ -89,22 +103,41 @@ def analyze_thumbnail(image_path):
         if 0.2 < face_center_x < 0.8 and 0.2 < face_center_y < 0.8:
             face_centered = True
 
-    b, g, r = cv2.split(img)
-    vibrancy = float(np.mean([np.std(b), np.std(g), np.std(r)]))
-
-    contrast_norm = min(contrast_score / 50.0, 1.0) * 30
-    sharpness_norm = min(sharpness_score / 2000.0, 1.0) * 20
-    vibrancy_norm = min(vibrancy / 60.0, 1.0) * 10
-    face_score = 30 if face_count > 0 else 0
-    center_score = 10 if face_centered else 0
+    # 4. NICHE-SPECIFIC SCORING ALGORITHM
+    # Normalize metrics to 0-1 range
+    c_norm = min(contrast_score / 50.0, 1.0)
+    s_norm = min(sharpness_score / 2000.0, 1.0)
+    v_norm = min(vibrancy / 60.0, 1.0)
+    e_norm = min(edge_density / 15.0, 1.0) # Cap edge density normalization
     
-    final_score = int(round(max(0, min(100, contrast_norm + sharpness_norm + vibrancy_norm + face_score + center_score))))
+    face_pts = 1.0 if face_count > 0 else 0.0
+    center_pts = 1.0 if face_centered else 0.0
+
+    final_score = 0
+    
+    if niche_mode == "Technical":
+        # Technical: Info density is king. Faces are secondary.
+        # Weights: Contrast 20%, Sharpness 15%, Vibrancy 10%, Info Density 35%, Face 15%, Center 5%
+        final_score = (c_norm * 20) + (s_norm * 15) + (v_norm * 10) + (e_norm * 35) + (face_pts * 15) + (center_pts * 5)
+        
+    elif niche_mode == "Finance":
+        # Finance: Balanced. Trust (faces) + Data (info density).
+        # Weights: Contrast 20%, Sharpness 15%, Vibrancy 15%, Info Density 20%, Face 25%, Center 5%
+        final_score = (c_norm * 20) + (s_norm * 15) + (v_norm * 15) + (e_norm * 20) + (face_pts * 25) + (center_pts * 5)
+        
+    else: # Entertainment
+        # Entertainment: Faces and Vibrancy are king.
+        # Weights: Contrast 20%, Sharpness 10%, Vibrancy 25%, Info Density 10%, Face 30%, Center 5%
+        final_score = (c_norm * 20) + (s_norm * 10) + (v_norm * 25) + (e_norm * 10) + (face_pts * 30) + (center_pts * 5)
+
+    final_score = int(round(max(0, min(100, final_score))))
 
     return {
         "score": final_score,
         "contrast": round(contrast_score, 1),
         "sharpness": round(sharpness_score, 0),
         "vibrancy": round(vibrancy, 1),
+        "info_density": round(edge_density, 1),
         "faces": face_count,
         "face_centered": face_centered
     }
@@ -204,7 +237,7 @@ def detect_boring_signals(video_path):
             "stagnation_rate": round(stagnation_rate, 1),
             "avg_motion": round(avg_motion, 2),
             "is_boring": is_boring,
-            "verdict": "⚠️ BORING - Add visual variety" if is_boring else "✅ ENGAGING - Good visual dynamics"
+            "verdict": "️ BORING - Add visual variety" if is_boring else "✅ ENGAGING - Good visual dynamics"
         }
     except Exception as e:
         return {"error": f"Analysis failed: {str(e)[:100]}"}
@@ -310,8 +343,9 @@ with st.sidebar:
     st.header("⚙️ Settings")
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
+    
     st.markdown("---")
-    st.info("**Pro Features:**\n- Title Optimizer\n- Thumbnail Brief\n- A/B Thumbnail Comparator")
+    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- A/B Comparator")
 
 # INPUT SECTION
 st.subheader("📥 Inputs")
@@ -329,7 +363,12 @@ with col_title:
 with col_topic:
     topic_input = st.text_input("4. Main Topic/Keyword", placeholder="e.g., Bitcoin backtesting, Python algo")
 
-st.subheader(" Thumbnail A/B Testing")
+# NICHE SELECTOR
+st.subheader("🎯 Content Niche Mode")
+niche_mode = st.selectbox("Select your channel type to calibrate scoring weights:", 
+                          ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
+
+st.subheader("🖼️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
 st.subheader("📝 Transcript (Optional)")
@@ -338,7 +377,7 @@ manual_transcript = st.text_area("Paste hook script if auto-fetch fails", height
 # BUTTONS
 col_btn1, col_btn2 = st.columns([3, 1])
 with col_btn1:
-    run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
+    run_analysis = st.button(" Full Analysis", type="primary", use_container_width=True)
 with col_btn2:
     quick_thumb = st.button("🎨 Thumbnail Brief Only", use_container_width=True)
 
@@ -350,6 +389,9 @@ if run_analysis or quick_thumb:
     elif not url_input and not uploaded_file and not manual_transcript and not new_thumb_file:
         st.error("Please provide at least one input.")
     else:
+        # Extract just the mode name for the function
+        mode_name = niche_mode.split(" ")[0] 
+        
         with st.spinner("Processing..."):
             thumb_path = None
             transcript = ""
@@ -373,17 +415,17 @@ if run_analysis or quick_thumb:
 
         final_transcript = manual_transcript if manual_transcript else transcript
         
-        # === THUMBNAIL A/B COMPARATOR ===
+        # === THUMBNAIL A/B COMPARATOR (NICHE AWARE) ===
         st.markdown("---")
-        st.subheader("🖼️ Thumbnail A/B Comparator")
+        st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
         
         orig_metrics = None
         new_metrics = None
         
         if thumb_path and os.path.exists(thumb_path):
-            orig_metrics = analyze_thumbnail(thumb_path)
+            orig_metrics = analyze_thumbnail(thumb_path, mode_name)
         if new_thumb_path and os.path.exists(new_thumb_path):
-            new_metrics = analyze_thumbnail(new_thumb_path)
+            new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
 
         if orig_metrics and new_metrics:
             col_orig, col_new = st.columns(2)
@@ -392,40 +434,38 @@ if run_analysis or quick_thumb:
                 st.markdown("#### 🅰️ Original Thumbnail")
                 st.image(thumb_path, use_column_width=True)
                 st.metric("Score", f"{orig_metrics['score']}/100")
-                st.write(f"Contrast: {orig_metrics['contrast']} | Sharpness: {orig_metrics['sharpness']}")
+                st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']}")
                 st.write(f"Faces: {orig_metrics['faces']}")
                 
             with col_new:
                 st.markdown("#### ️ New/AI Thumbnail")
                 st.image(new_thumb_path, use_column_width=True)
                 
-                # Calculate Deltas
                 score_delta = new_metrics['score'] - orig_metrics['score']
-                contrast_delta = round(new_metrics['contrast'] - orig_metrics['contrast'], 1)
                 
                 st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
-                st.write(f"Contrast: {new_metrics['contrast']} (Δ {contrast_delta}) | Sharpness: {new_metrics['sharpness']}")
+                st.write(f"Info Density: {new_metrics['info_density']} | Contrast: {new_metrics['contrast']}")
                 st.write(f"Faces: {new_metrics['faces']}")
                 
             st.markdown("---")
             if score_delta > 5:
-                st.success(f"🏆 **Winner: New Thumbnail!** It scores {score_delta} points higher. Use this one!")
+                st.success(f"🏆 **Winner: New Thumbnail!** It scores {score_delta} points higher in {mode_name} mode.")
             elif score_delta < -5:
-                st.error(f"⚠️ **Winner: Original Thumbnail.** The new one dropped by {abs(score_delta)} points. Stick to the original.")
+                st.error(f"⚠️ **Winner: Original Thumbnail.** The new one dropped by {abs(score_delta)} points.")
             else:
-                st.info(f"️ **Tie Game.** Both thumbnails are statistically similar. Test both via YouTube A/B testing!")
+                st.info(f"⚖️ **Tie Game.** Both thumbnails are statistically similar for this niche.")
                 
         elif orig_metrics:
             st.markdown("#### 🅰️ Original Thumbnail Analysis")
             st.image(thumb_path, use_column_width=True)
             st.metric("Score", f"{orig_metrics['score']}/100")
-            st.write(f"Contrast: {orig_metrics['contrast']} | Sharpness: {orig_metrics['sharpness']} | Vibrancy: {orig_metrics['vibrancy']}")
+            st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']} | Sharpness: {orig_metrics['sharpness']}")
             st.write(f"Faces: {orig_metrics['faces']}")
         elif new_metrics:
-            st.markdown("#### 🅱️ New Thumbnail Analysis")
+            st.markdown("#### ️ New Thumbnail Analysis")
             st.image(new_thumb_path, use_column_width=True)
             st.metric("Score", f"{new_metrics['score']}/100")
-            st.write(f"Contrast: {new_metrics['contrast']} | Sharpness: {new_metrics['sharpness']} | Vibrancy: {new_metrics['vibrancy']}")
+            st.write(f"Info Density: {new_metrics['info_density']} | Contrast: {new_metrics['contrast']} | Sharpness: {new_metrics['sharpness']}")
             st.write(f"Faces: {new_metrics['faces']}")
         else:
             st.info("Upload an Original (via URL) or New Thumbnail to see metrics.")
@@ -442,7 +482,7 @@ if run_analysis or quick_thumb:
                     col_t1, col_t2, col_t3 = st.columns(3)
                     col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100")
                     col_t2.metric("Characters", title_analysis.get('character_count', 0))
-                    col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "️ Adjust")
+                    col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
                     
                     st.markdown("**Alternative Titles:**")
                     for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1):
