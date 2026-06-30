@@ -289,30 +289,33 @@ def generate_thumbnail_brief(title, transcript, topic):
         return {"error": str(e)}
 
 def generate_seo_description_and_tags(title, transcript, topic):
+    """Generate SEO-optimized description and tags with a strict Quant persona"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     
     prompt = f"""
-    You are a YouTube SEO expert specializing in technical/finance content.
+    You are a Senior Quantitative Researcher and Elite YouTube Educator for institutional-level algorithmic trading.
+    
+    STRICT RULES:
+    1. ZERO marketing fluff. Do NOT use phrases like "take your trading to the next level", "secret strategy", "mind-blowing", or generic YouTube hype.
+    2. Be highly technical, clinical, and precise. Speak directly to Python developers, data scientists, and systematic traders.
+    3. Focus on methodology, mathematical rigor, and code implementation.
+    4. Structure the description exactly like a professional research abstract mixed with a high-value tutorial outline.
     
     Video Title: "{title}"
     Topic: {topic}
-    Transcript: "{transcript[:500]}"
+    Transcript Snippet: "{transcript[:500]}"
     
     Generate:
-    1. A compelling 2-3 sentence description hook (first 150 characters are critical for SEO)
-    2. Full description with:
-       - Natural keyword integration
-       - What viewers will learn
-       - Call-to-action
-       - Placeholder for timestamps
-       - Placeholder for links/resources
-    3. 15 highly-targeted tags (mix of high-volume and long-tail keywords)
-    4. 3-5 hashtags for the description
+    1. A technical hook (2 sentences max) stating the exact mathematical/programmatic problem being solved.
+    2. A 'What we cover:' section with 4-5 bullet points detailing the specific concepts (e.g., walk-forward splits, slippage modeling, regime filters).
+    3. A 'Metrics analyzed:' section listing the exact performance metrics shown.
+    4. A professional CTA (e.g., "Comment [KEYWORD] for the GitHub repo").
+    5. 15 highly technical tags (e.g., 'Walk-Forward Optimization', 'Lookahead Bias', 'Regime Detection'). NO generic tags like 'make money'.
     
     Output STRICT JSON:
-    "description_hook" (string, 150 chars max),
+    "description_hook" (string),
     "full_description" (string, complete formatted description),
     "tags" (array of exactly 15 strings),
     "hashtags" (array of 3-5 strings),
@@ -324,7 +327,7 @@ def generate_seo_description_and_tags(title, transcript, topic):
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.5,
+            temperature=0.4,
             response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
@@ -332,13 +335,13 @@ def generate_seo_description_and_tags(title, transcript, topic):
         return {"error": str(e)}
 
 def analyze_user_description(user_desc, title, topic, transcript):
-    """Analyze and score user's own description"""
+    """Analyze and score user's own description with a Quant focus"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     
     prompt = f"""
-    You are a YouTube SEO expert analyzing a creator's video description.
+    You are a Senior Quantitative Researcher evaluating a peer's YouTube video description.
     
     Video Title: "{title}"
     Topic: {topic}
@@ -347,27 +350,21 @@ def analyze_user_description(user_desc, title, topic, transcript):
     User's Description:
     "{user_desc}"
     
-    Analyze and provide:
-    1. SEO Score (0-100) based on: keyword usage, hook quality, length, CTA presence
-    2. Character count and optimal length check
-    3. What's working well (3 strengths)
-    4. What's missing (3 weaknesses)
-    5. Specific improvements to make
-    6. Keyword density analysis
-    7. Readability score
+    Evaluate this description based on TECHNICAL AUTHORITY and SEO, NOT marketing hype.
     
     Output STRICT JSON:
     "seo_score" (int 0-100),
     "character_count" (int),
     "is_optimal_length" (bool),
-    "strengths" (array of 3 strings),
-    "weaknesses" (array of 3 strings),
-    "improvements" (array of 3 strings),
+    "strengths" (array of 3 strings focusing on technical depth and clarity),
+    "weaknesses" (array of 3 strings focusing on missing SEO elements like timestamps or links),
+    "improvements" (array of 3 strings on how to improve SEO without losing technical authority),
     "keyword_density" (string),
     "readability_score" (int 0-100),
     "has_cta" (bool),
     "has_keywords" (bool),
-    "has_timestamps_placeholder" (bool)
+    "has_timestamps_placeholder" (bool),
+    "technical_depth_score" (int 0-100)
     """
     
     try:
@@ -415,7 +412,7 @@ st.title("📈 QuantTube Analyzer Pro")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("️ Settings")
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
@@ -512,15 +509,27 @@ if run_analysis or quick_thumb or seo_only:
                 col_s3.metric("Length", "✅ Optimal" if user_analysis.get('is_optimal_length') else "⚠️ Adjust")
                 col_s4.metric("Readability", f"{user_analysis.get('readability_score', 0)}/100")
                 
-                # Checklist
+                # Checklist (FIXED BUG)
                 st.markdown("### ✅ Description Checklist:")
                 check_col1, check_col2, check_col3 = st.columns(3)
+                
                 with check_col1:
-                    st.success("✅ Has CTA") if user_analysis.get('has_cta') else st.error("❌ Missing CTA")
+                    if user_analysis.get('has_cta'):
+                        st.success("✅ Has CTA")
+                    else:
+                        st.error("❌ Missing CTA")
+                        
                 with check_col2:
-                    st.success("✅ Has Keywords") if user_analysis.get('has_keywords') else st.error("❌ Missing Keywords")
+                    if user_analysis.get('has_keywords'):
+                        st.success("✅ Has Keywords")
+                    else:
+                        st.error("❌ Missing Keywords")
+                        
                 with check_col3:
-                    st.success("✅ Has Timestamps") if user_analysis.get('has_timestamps_placeholder') else st.warning("⚠️ No Timestamps")
+                    if user_analysis.get('has_timestamps_placeholder'):
+                        st.success("✅ Has Timestamps")
+                    else:
+                        st.warning("️ No Timestamps")
                 
                 # Detailed Analysis
                 st.markdown("---")
@@ -532,7 +541,7 @@ if run_analysis or quick_thumb or seo_only:
                         st.success(f"✓ {strength}")
                 
                 with col_a2:
-                    st.markdown("### ⚠️ What's Missing:")
+                    st.markdown("### ️ What's Missing:")
                     for weakness in user_analysis.get('weaknesses', []):
                         st.error(f"✗ {weakness}")
                 
@@ -568,7 +577,7 @@ if run_analysis or quick_thumb or seo_only:
                     tags_string = ", ".join(ai_seo.get('tags', []))
                     st.code(tags_string, language="text")
                     
-                    st.markdown("### #️⃣ Hashtags")
+                    st.markdown("### #️ Hashtags")
                     st.write(" ".join(ai_seo.get('hashtags', [])))
 
         # === SEO GENERATOR (if no user description provided) ===
@@ -624,7 +633,7 @@ if run_analysis or quick_thumb or seo_only:
                     st.write(f"Faces: {orig_metrics['faces']}")
                     
                 with col_new:
-                    st.markdown("#### 🅱️ New/AI Thumbnail")
+                    st.markdown("#### ️ New/AI Thumbnail")
                     st.image(new_thumb_path, use_column_width=True)
                     
                     score_delta = new_metrics['score'] - orig_metrics['score']
@@ -635,11 +644,11 @@ if run_analysis or quick_thumb or seo_only:
                     
                 st.markdown("---")
                 if score_delta > 5:
-                    st.success(f"🏆 **Winner: New Thumbnail!** It scores {score_delta} points higher in {mode_name} mode.")
+                    st.success(f" **Winner: New Thumbnail!** It scores {score_delta} points higher in {mode_name} mode.")
                 elif score_delta < -5:
                     st.error(f"⚠️ **Winner: Original Thumbnail.** The new one dropped by {abs(score_delta)} points.")
                 else:
-                    st.info(f"⚖️ **Tie Game.** Both thumbnails are statistically similar for this niche.")
+                    st.info(f"️ **Tie Game.** Both thumbnails are statistically similar for this niche.")
                     
             elif orig_metrics:
                 st.markdown("#### 🅰️ Original Thumbnail Analysis")
@@ -684,7 +693,7 @@ if run_analysis or quick_thumb or seo_only:
 
                 if video_path and os.path.exists(video_path):
                     st.markdown("---")
-                    st.subheader("🎬 Hook & Retention Analysis")
+                    st.subheader(" Hook & Retention Analysis")
                     
                     with st.spinner("Analyzing pacing..."):
                         vid_metrics = analyze_hook_video(video_path)
