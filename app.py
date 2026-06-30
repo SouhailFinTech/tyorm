@@ -217,7 +217,7 @@ def detect_boring_signals(video_path):
             "stagnation_rate": round(stagnation_rate, 1),
             "avg_motion": round(avg_motion, 2),
             "is_boring": is_boring,
-            "verdict": "️ BORING - Add visual variety" if is_boring else "✅ ENGAGING - Good visual dynamics"
+            "verdict": "⚠️ BORING - Add visual variety" if is_boring else "✅ ENGAGING - Good visual dynamics"
         }
     except Exception as e:
         return {"error": f"Analysis failed: {str(e)[:100]}"}
@@ -378,8 +378,8 @@ def analyze_user_description(user_desc, title, topic, transcript):
     except Exception as e:
         return {"error": str(e)}
 
-def analyze_script_with_llm(transcript, cpm):
-    """Analyzes script and generates a Visual Storyboard with STRICT Cold Open rules"""
+def analyze_script_with_llm(problem, mechanism, payoff, cpm):
+    """Analyzes user-provided hook elements and generates a script + Visual Storyboard"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
@@ -387,29 +387,29 @@ def analyze_script_with_llm(transcript, cpm):
     prompt = f"""
     You are an elite YouTube Strategist and Visual Director for top-tier technical/quant channels.
     Visual Pacing: {cpm} Cuts Per Minute.
-    Original Transcript (First 30s): "{transcript}"
-    
+
+    USER PROVIDED HOOK ELEMENTS (THE "INGREDIENTS"):
+    - Problem(s): {problem}
+    - Mechanism(s): {mechanism}
+    - Payoff(s): {payoff}
+
     TASK:
-    1. Evaluate the hook on Pattern Interrupt, Value Prop, and Jargon Density (1-10).
-    2. Provide a punchy rewrite of the first 3 sentences.
-    3. Generate a 'Visual Storyboard' for the first 30 seconds. 
-    
-    CRITICAL NEGATIVE CONSTRAINTS (DO NOT VIOLATE):
-    - NEVER start the audio with "Hi, welcome to my channel", "Hey guys", or "In this video". Start IMMEDIATELY with the problem, a bold claim, or the final result (Cold Open).
-    - NEVER suggest showing basic code imports (like `import pandas` or `import numpy`). Viewers know what these are. Show the *complex logic*, the *error*, the *backtest result*, or the *chart anomaly* instead.
-    - NEVER use marketing fluff like "revolutionize your trading", "dominate the markets", or "secret strategy". Speak like a Senior Quant Researcher.
-    
-    RULES FOR STORYBOARD VISUALS:
-    - Suggest specific technical visuals: Code zooms on complex logic, chart overlays with specific indicators, kinetic typography of exact metrics, digital punch-ins.
-    - Format: Break it into 3-4 distinct time blocks (e.g., 0:00-0:05).
-    
+    1. Evaluate these elements on Pattern Interrupt, Value Prop, and Jargon Density (1-10).
+    2. Write a punchy, 30-second Cold Open script that seamlessly weaves these exact elements together. 
+       - RULES: Start IMMEDIATELY with the Problem. Transition into the Mechanism. End with the Payoff. 
+       - NO FLUFF: Do not use "Hi guys", "Welcome back", "Let's dive in", or "In this video". 
+       - Speak like a Senior Quant Researcher. Use the exact data points provided.
+    3. Generate a 'Visual Storyboard' for this exact 30-second script. 
+       - RULES FOR STORYBOARD: Suggest specific technical visuals: Code zooms on complex logic, chart overlays with specific indicators, kinetic typography of exact metrics, digital punch-ins.
+       - Format: Break it into 3-4 distinct time blocks (e.g., 0:00-0:05).
+
     Output STRICT JSON:
     "pattern_interrupt_score" (int),
     "value_prop_score" (int),
     "jargon_score" (int),
     "overall_hook_score" (int 0-100),
     "critique" (string),
-    "rewrite_suggestion" (string),
+    "script_rewrite" (string, the full 30s script),
     "visual_storyboard" (array of objects with keys: "time", "visual_action", "audio_line")
     """
     try:
@@ -424,7 +424,7 @@ def analyze_script_with_llm(transcript, cpm):
         return {"error": str(e)}
 
 # --- UI ---
-st.title(" QuantTube Analyzer Pro")
+st.title("📈 QuantTube Analyzer Pro")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
 with st.sidebar:
@@ -432,7 +432,7 @@ with st.sidebar:
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
-    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description\n- Visual Storyboard\n- A/B Comparator")
+    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description\n- Hook Builder & Storyboard\n- A/B Comparator")
 
 # INPUT SECTION
 st.subheader("📥 Inputs")
@@ -454,21 +454,36 @@ st.subheader("🎯 Content Niche Mode")
 niche_mode = st.selectbox("Select your channel type to calibrate scoring weights:", 
                           ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
 
-st.subheader("🖼️ Thumbnail A/B Testing")
+st.subheader("️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
-st.subheader("📝 Transcript (Optional)")
-manual_transcript = st.text_area("Paste hook script if auto-fetch fails", height=80)
-
-st.subheader("✍️ Your Description (For Analysis)")
+st.subheader("️ Your Description (For Analysis)")
 user_description = st.text_area("Paste YOUR existing description here to get it analyzed and scored", 
-                                 height=150, 
+                                 height=100, 
                                  placeholder="Paste your current video description here...")
+
+# HOOK BUILDER INPUTS
+st.subheader("🎣 Hook Builder (Provide the Ingredients)")
+st.caption("Give the AI your specific data points. You can list 1 to 3 items per box. The AI will weave them into a viral Cold Open.")
+
+col_p, col_m, col_pay = st.columns(3)
+with col_p:
+    problem_input = st.text_area("The Problem (Pain points, bad stats, what fails)", 
+                                 height=100, 
+                                 placeholder="- Most backtests hide 15% drawdowns\n- Lookahead bias ruins EMA crossovers")
+with col_m:
+    mechanism_input = st.text_area("The Mechanism (Your specific solution/method)", 
+                                   height=100, 
+                                   placeholder="- 70/30 Walk-forward split\n- 0.05% slippage model\n- ADX regime filter")
+with col_pay:
+    payoff_input = st.text_area("The Payoff (The result/deliverable)", 
+                                height=100, 
+                                placeholder="- Sharpe ratio of 0.82\n- Exact Python validation framework")
 
 # BUTTONS
 col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
 with col_btn1:
-    run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
+    run_analysis = st.button(" Full Analysis", type="primary", use_container_width=True)
 with col_btn2:
     quick_thumb = st.button("🎨 Thumbnail Brief Only", use_container_width=True)
 with col_btn3:
@@ -479,8 +494,8 @@ if run_analysis or quick_thumb or seo_only:
         st.error("Please enter a video title.")
     elif not topic_input and not quick_thumb:
         st.error("Please enter the main topic.")
-    elif not url_input and not uploaded_file and not manual_transcript and not new_thumb_file and not seo_only:
-        st.error("Please provide at least one input.")
+    elif not url_input and not uploaded_file and not new_thumb_file and not seo_only and not problem_input:
+        st.error("Please provide at least one input (URL, Video, Description, or Hook Builder).")
     else:
         mode_name = niche_mode.split(" ")[0] 
         
@@ -505,7 +520,7 @@ if run_analysis or quick_thumb or seo_only:
                 with open(new_thumb_path, "wb") as f:
                     f.write(new_thumb_file.getbuffer())
 
-        final_transcript = manual_transcript if manual_transcript else transcript
+        final_transcript = transcript # Fallback for description analyzer
         
         # === USER DESCRIPTION ANALYZER ===
         if user_description and (run_analysis or seo_only):
@@ -532,10 +547,10 @@ if run_analysis or quick_thumb or seo_only:
                     else: st.error("❌ Missing CTA")
                 with check_col2:
                     if user_analysis.get('has_keywords'): st.success("✅ Has Keywords")
-                    else: st.error(" Missing Keywords")
+                    else: st.error("❌ Missing Keywords")
                 with check_col3:
                     if user_analysis.get('has_timestamps_placeholder'): st.success("✅ Has Timestamps")
-                    else: st.warning("⚠️ No Timestamps")
+                    else: st.warning("️ No Timestamps")
                 
                 st.markdown("---")
                 col_a1, col_a2 = st.columns(2)
@@ -546,7 +561,7 @@ if run_analysis or quick_thumb or seo_only:
                     st.markdown("### ⚠️ What's Missing:")
                     for weakness in user_analysis.get('weaknesses', []): st.error(f"✗ {weakness}")
                 
-                st.markdown("###  Specific Improvements:")
+                st.markdown("### 🎯 Specific Improvements:")
                 for improvement in user_analysis.get('improvements', []): st.info(f"→ {improvement}")
                 
                 st.markdown(f"**Keyword Density:** {user_analysis.get('keyword_density', 'N/A')}")
@@ -568,7 +583,7 @@ if run_analysis or quick_thumb or seo_only:
                         st.caption(f"Score: {ai_seo.get('seo_score', 0)}/100")
                     
                     st.markdown("---")
-                    st.markdown("### 🏷️ Recommended Tags (Copy-Paste Ready)")
+                    st.markdown("### ️ Recommended Tags (Copy-Paste Ready)")
                     st.code(", ".join(ai_seo.get('tags', [])), language="text")
                     st.markdown("### #️⃣ Hashtags")
                     st.write(" ".join(ai_seo.get('hashtags', [])))
@@ -594,7 +609,7 @@ if run_analysis or quick_thumb or seo_only:
         # === THUMBNAIL A/B COMPARATOR ===
         if not seo_only:
             st.markdown("---")
-            st.subheader(f"️ Thumbnail A/B Comparator ({mode_name} Mode)")
+            st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
             
             orig_metrics = None
             new_metrics = None
@@ -618,10 +633,10 @@ if run_analysis or quick_thumb or seo_only:
                 
                 st.markdown("---")
                 if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** It scores {score_delta} points higher.")
-                elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** Dropped by {abs(score_delta)} points.")
+                elif score_delta < -5: st.error(f"⚠️ **Winner: Original Thumbnail.** Dropped by {abs(score_delta)} points.")
                 else: st.info(f"⚖️ **Tie Game.** Statistically similar.")
             elif orig_metrics:
-                st.markdown("#### 🅰️ Original Thumbnail Analysis")
+                st.markdown("#### ️ Original Thumbnail Analysis")
                 st.image(thumb_path, use_column_width=True)
                 st.metric("Score", f"{orig_metrics['score']}/100")
                 st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']} | Sharpness: {orig_metrics['sharpness']}")
@@ -675,9 +690,13 @@ if run_analysis or quick_thumb or seo_only:
                         if boring_metrics['is_boring']: st.error("🚨 BORING - Add B-roll, zoom cuts, or screen recordings!")
                         else: st.success("✅ ENGAGING - Good visual dynamics.")
 
-                    if "GROQ_API_KEY" in st.secrets and final_transcript and final_transcript != "No transcript available.":
-                        with st.spinner("Generating Script & Visual Storyboard..."):
-                            llm_data = analyze_script_with_llm(final_transcript, cpm)
+                    # === HOOK BUILDER & STORYBOARD ===
+                    if problem_input or mechanism_input or payoff_input:
+                        st.markdown("---")
+                        st.subheader("🎣 AI Hook Builder & Visual Storyboard")
+                        
+                        with st.spinner("Weaving your ingredients into a Cold Open script..."):
+                            llm_data = analyze_script_with_llm(problem_input, mechanism_input, payoff_input, cpm)
                         
                         if "error" not in llm_data:
                             s1, s2, s3 = st.columns(3)
@@ -690,13 +709,15 @@ if run_analysis or quick_thumb or seo_only:
                             st.caption(f"Overall Hook Score: {hook_score}/100")
                             
                             st.info(f"**AI Critique:** {llm_data.get('critique')}")
-                            st.success(f"**Script Rewrite:** {llm_data.get('rewrite_suggestion')}")
+                            
+                            st.markdown("### ️ The Rewritten Cold Open Script")
+                            st.success(llm_data.get('script_rewrite', 'N/A'))
                             
                             # === VISUAL STORYBOARD UI ===
                             storyboard = llm_data.get('visual_storyboard', [])
                             if storyboard:
                                 st.markdown("---")
-                                st.subheader("🎬 Visual Storyboard (What to Show)")
+                                st.subheader(" Visual Storyboard (What to Show)")
                                 st.caption("Follow this second-by-second blueprint to fix your Boring Score.")
                                 
                                 for shot in storyboard:
@@ -707,6 +728,8 @@ if run_analysis or quick_thumb or seo_only:
                                     with col_a:
                                         st.markdown(f"**🗣️ Audio Line:**\n{shot.get('audio_line')}")
                                     st.divider()
+                    else:
+                        st.info(" **Pro Tip:** Fill out the 'Hook Builder' boxes above to generate a custom Cold Open script and Visual Storyboard!")
 
         for f in [thumb_path, video_path, new_thumb_path]:
             if f and os.path.exists(f):
