@@ -51,7 +51,7 @@ def fetch_thumbnail_and_transcript(url):
     except Exception:
         thumb_path = None
 
-    return thumb_path, transcript_text[:2000], None # Increased transcript length for better data extraction
+    return thumb_path, transcript_text[:2500], None
 
 def analyze_thumbnail(image_path, niche_mode="Technical"):
     if not image_path or not os.path.exists(image_path):
@@ -287,33 +287,34 @@ def generate_thumbnail_brief(title, transcript, topic):
         return {"error": str(e)}
 
 def generate_seo_description_and_tags(title, transcript, topic):
-    """Generate SEO-optimized description with strict YouTube formatting and data hooks"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     
     prompt = f"""
-    You are a top 1% Quant YouTube Creator. Your goal is to write a description that outperforms a Senior Quant Researcher.
+    You are an expert Technical Editor for a top-tier Quantitative Finance YouTube channel.
+    
+    YOUR TASK: Write a YouTube description based STRICTLY on the provided transcript.
     
     CRITICAL RULES:
-    1. NO HTML TAGS. Use ONLY Markdown (## for headers, - for bullets, ** for bold). YouTube does not render HTML.
-    2. THE "ABOVE THE FOLD" RULE: The first 120 characters are the ONLY thing viewers see before clicking "Show more". Start IMMEDIATELY with a hard-hitting technical fact, a specific number, or a bold claim. Do NOT start with "This tutorial presents..." or "In this video...".
-    3. DATA SPECIFICITY: Extract exact numbers from the transcript (e.g., '0.05% slippage', '70/30 splits', 'Sharpe 0.82'). Generic terms like 'realistic costs' are forbidden.
+    1. ZERO HALLUCINATIONS: Do NOT invent statistics. Extract EXACT numbers from the transcript.
+    2. ZERO FLUFF: Do NOT use phrases like "Subscribe now", "exclusive content", or "mind-blowing". 
+    3. FORMATTING: Use clean Markdown (## for headers, - for bullets). No HTML.
     
     Video Title: "{title}"
     Topic: {topic}
-    Transcript: "{transcript[:1500]}"
+    Transcript: "{transcript[:2000]}"
     
     Generate:
-    1. A 120-character hook packed with specific data.
-    2. A ## What we cover: section with 4-5 bullet points using specific technical examples.
-    3. A ## Metrics analyzed: section.
-    4. A professional CTA.
+    1. A 1-2 sentence technical hook summarizing the exact problem and solution.
+    2. A '## Core Methodology:' section with 3-4 bullet points detailing exact parameters.
+    3. A '## Results & Metrics:' section listing exact performance numbers.
+    4. A professional, non-salesy CTA.
     5. 15 highly technical tags.
     
     Output STRICT JSON:
     "description_hook" (string),
-    "full_description" (string, complete formatted description using Markdown),
+    "full_description" (string),
     "tags" (array of exactly 15 strings),
     "hashtags" (array of 3-5 strings),
     "primary_keywords" (array of 5 strings),
@@ -324,7 +325,7 @@ def generate_seo_description_and_tags(title, transcript, topic):
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
+            temperature=0.1,
             response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
@@ -332,25 +333,24 @@ def generate_seo_description_and_tags(title, transcript, topic):
         return {"error": str(e)}
 
 def analyze_user_description(user_desc, title, topic, transcript):
-    """Analyze and score user's own description with a harsh, data-focused rubric"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     
     prompt = f"""
-    You are a harsh YouTube Algorithm Expert evaluating a Quant video description.
+    You are a strict Quantitative Finance Editor evaluating a YouTube description.
     
     Video Title: "{title}"
     Topic: {topic}
-    Transcript Snippet: "{transcript[:300]}"
+    Transcript Snippet: "{transcript[:1000]}"
     
     User's Description:
     "{user_desc}"
     
-    Evaluate based on these strict rules:
-    1. ABOVE THE FOLD (First 120 chars): Does it immediately hook the viewer with a hard fact or number? If it starts with "This tutorial..." or "In this video...", penalize it heavily.
-    2. DATA SPECIFICITY: Reward specific numbers (e.g., '0.05% slippage', 'Sharpe 0.82'). Penalize vague terms like 'realistic costs' or 'statistical significance'.
-    3. FORMATTING: Penalize HTML tags (<h2>, <ul>). Reward clean Markdown or plain text.
+    EVALUATION RUBRIC:
+    1. FACTUAL ACCURACY (50 points): Does it use specific, accurate numbers from the transcript?
+    2. TECHNICAL AUTHORITY (30 points): Does it sound like a professional quant researcher? Deduct points for fluff.
+    3. SEO & STRUCTURE (20 points): Are keywords naturally integrated?
     
     Output STRICT JSON:
     "seo_score" (int 0-100),
@@ -371,7 +371,7 @@ def analyze_user_description(user_desc, title, topic, transcript):
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=0.2,
             response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
@@ -379,14 +379,22 @@ def analyze_user_description(user_desc, title, topic, transcript):
         return {"error": str(e)}
 
 def analyze_script_with_llm(transcript, cpm):
+    """Analyzes script and generates a Visual Storyboard"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     
     prompt = f"""
-    You are an expert YouTube strategist for technical/finance channels.
+    You are an expert YouTube Strategist and Visual Director for technical/quant channels.
     Visual Pacing: {cpm} Cuts Per Minute.
-    Transcript: "{transcript}"
+    Transcript (First 30s): "{transcript}"
+    
+    TASK:
+    1. Evaluate the hook on Pattern Interrupt, Value Prop, and Jargon Density (1-10).
+    2. Provide a punchy rewrite of the first 3 sentences.
+    3. Generate a 'Visual Storyboard' for the first 30 seconds. 
+       - RULES FOR STORYBOARD: Do NOT suggest generic "B-roll". Suggest specific technical visuals: Code zooms, chart overlays, kinetic typography, digital punch-ins.
+       - Format: Break it into 3-4 distinct time blocks (e.g., 0:00-0:05).
     
     Output STRICT JSON:
     "pattern_interrupt_score" (int),
@@ -394,7 +402,8 @@ def analyze_script_with_llm(transcript, cpm):
     "jargon_score" (int),
     "overall_hook_score" (int 0-100),
     "critique" (string),
-    "rewrite_suggestion" (string).
+    "rewrite_suggestion" (string),
+    "visual_storyboard" (array of objects with keys: "time", "visual_action", "audio_line")
     """
     try:
         completion = client.chat.completions.create(
@@ -416,10 +425,10 @@ with st.sidebar:
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
-    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description Generator\n- Your Description Analyzer\n- A/B Comparator")
+    st.info("**Pro Features:**\n- Niche-Aware Scoring\n- Title Optimizer\n- Thumbnail Brief\n- SEO Description\n- Visual Storyboard\n- A/B Comparator")
 
 # INPUT SECTION
-st.subheader("📥 Inputs")
+st.subheader(" Inputs")
 col_url, col_upload = st.columns(2)
 
 with col_url:
@@ -438,7 +447,7 @@ st.subheader("🎯 Content Niche Mode")
 niche_mode = st.selectbox("Select your channel type to calibrate scoring weights:", 
                           ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
 
-st.subheader("️ Thumbnail A/B Testing")
+st.subheader("🖼️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
 st.subheader("📝 Transcript (Optional)")
@@ -447,7 +456,7 @@ manual_transcript = st.text_area("Paste hook script if auto-fetch fails", height
 st.subheader("✍️ Your Description (For Analysis)")
 user_description = st.text_area("Paste YOUR existing description here to get it analyzed and scored", 
                                  height=150, 
-                                 placeholder="Paste your current video description here to see how it compares to AI-optimized version...")
+                                 placeholder="Paste your current video description here...")
 
 # BUTTONS
 col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
@@ -512,56 +521,40 @@ if run_analysis or quick_thumb or seo_only:
                 check_col1, check_col2, check_col3 = st.columns(3)
                 
                 with check_col1:
-                    if user_analysis.get('has_cta'):
-                        st.success("✅ Has CTA")
-                    else:
-                        st.error("❌ Missing CTA")
-                        
+                    if user_analysis.get('has_cta'): st.success("✅ Has CTA")
+                    else: st.error("❌ Missing CTA")
                 with check_col2:
-                    if user_analysis.get('has_keywords'):
-                        st.success("✅ Has Keywords")
-                    else:
-                        st.error("❌ Missing Keywords")
-                        
+                    if user_analysis.get('has_keywords'): st.success("✅ Has Keywords")
+                    else: st.error("❌ Missing Keywords")
                 with check_col3:
-                    if user_analysis.get('has_timestamps_placeholder'):
-                        st.success("✅ Has Timestamps")
-                    else:
-                        st.warning("⚠️ No Timestamps")
+                    if user_analysis.get('has_timestamps_placeholder'): st.success("✅ Has Timestamps")
+                    else: st.warning("⚠️ No Timestamps")
                 
                 st.markdown("---")
                 col_a1, col_a2 = st.columns(2)
-                
                 with col_a1:
                     st.markdown("### ✅ What's Working Well:")
-                    for strength in user_analysis.get('strengths', []):
-                        st.success(f"✓ {strength}")
-                
+                    for strength in user_analysis.get('strengths', []): st.success(f"✓ {strength}")
                 with col_a2:
                     st.markdown("### ⚠️ What's Missing:")
-                    for weakness in user_analysis.get('weaknesses', []):
-                        st.error(f"✗ {weakness}")
+                    for weakness in user_analysis.get('weaknesses', []): st.error(f"✗ {weakness}")
                 
                 st.markdown("### 🎯 Specific Improvements:")
-                for improvement in user_analysis.get('improvements', []):
-                    st.info(f"→ {improvement}")
+                for improvement in user_analysis.get('improvements', []): st.info(f"→ {improvement}")
                 
                 st.markdown(f"**Keyword Density:** {user_analysis.get('keyword_density', 'N/A')}")
                 
                 st.markdown("---")
-                st.subheader("🔄 Comparison: Your Description vs AI-Optimized")
-                
-                with st.spinner("Generating AI-optimized version for comparison..."):
+                st.subheader(" Comparison: Your Description vs AI-Optimized")
+                with st.spinner("Generating AI-optimized version..."):
                     ai_seo = generate_seo_description_and_tags(title_input, final_transcript, topic_input)
                 
                 if "error" not in ai_seo:
                     col_user, col_ai = st.columns(2)
-                    
                     with col_user:
                         st.markdown("#### Your Description")
                         st.text_area("Your Version", value=user_description, height=300, disabled=True, key="user_desc_display")
                         st.caption(f"Score: {user_analysis.get('seo_score', 0)}/100")
-                    
                     with col_ai:
                         st.markdown("#### AI-Optimized Version")
                         st.text_area("AI Version", value=ai_seo.get('full_description', ''), height=300, disabled=True, key="ai_desc_display")
@@ -569,40 +562,27 @@ if run_analysis or quick_thumb or seo_only:
                     
                     st.markdown("---")
                     st.markdown("### 🏷️ Recommended Tags (Copy-Paste Ready)")
-                    tags_string = ", ".join(ai_seo.get('tags', []))
-                    st.code(tags_string, language="text")
-                    
-                    st.markdown("### #️ Hashtags")
+                    st.code(", ".join(ai_seo.get('tags', [])), language="text")
+                    st.markdown("### #️⃣ Hashtags")
                     st.write(" ".join(ai_seo.get('hashtags', [])))
 
         # === SEO GENERATOR (if no user description provided) ===
         elif title_input and (run_analysis or seo_only) and not user_description:
             st.markdown("---")
-            st.subheader("📝 SEO Description & Tags Generator")
-            
-            with st.spinner("Generating SEO-optimized description and tags..."):
+            st.subheader(" SEO Description & Tags Generator")
+            with st.spinner("Generating SEO-optimized description..."):
                 seo_data = generate_seo_description_and_tags(title_input, final_transcript, topic_input)
             
             if "error" in seo_data:
                 st.error(seo_data["error"])
             else:
-                seo_score = seo_data.get('seo_score', 0)
-                st.metric("SEO Optimization Score", f"{seo_score}/100")
-                
+                st.metric("SEO Optimization Score", f"{seo_data.get('seo_score', 0)}/100")
                 st.markdown("### 📄 Video Description (Copy-Paste Ready)")
-                full_desc = seo_data.get('full_description', '')
-                st.text_area("Complete Description", value=full_desc, height=300, key="desc_copy")
-                
-                st.info("💡 **Pro Tip:** Copy the description above and paste it directly into YouTube. Remember to fill in your actual timestamps and links!")
-                
+                st.text_area("Complete Description", value=seo_data.get('full_description', ''), height=300, key="desc_copy")
                 st.markdown("### 🏷️ Optimized Tags (15 Tags)")
-                tags = seo_data.get('tags', [])
-                tags_string = ", ".join(tags)
-                st.code(tags_string, language="text")
-                
+                st.code(", ".join(seo_data.get('tags', [])), language="text")
                 st.markdown("### #️⃣ Recommended Hashtags")
-                hashtags = seo_data.get('hashtags', [])
-                st.write(" ".join(hashtags))
+                st.write(" ".join(seo_data.get('hashtags', [])))
 
         # === THUMBNAIL A/B COMPARATOR ===
         if not seo_only:
@@ -612,45 +592,32 @@ if run_analysis or quick_thumb or seo_only:
             orig_metrics = None
             new_metrics = None
             
-            if thumb_path and os.path.exists(thumb_path):
-                orig_metrics = analyze_thumbnail(thumb_path, mode_name)
-            if new_thumb_path and os.path.exists(new_thumb_path):
-                new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
+            if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name)
+            if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
 
             if orig_metrics and new_metrics:
                 col_orig, col_new = st.columns(2)
-                
                 with col_orig:
                     st.markdown("#### 🅰️ Original Thumbnail")
                     st.image(thumb_path, use_column_width=True)
                     st.metric("Score", f"{orig_metrics['score']}/100")
                     st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']}")
-                    st.write(f"Faces: {orig_metrics['faces']}")
-                    
                 with col_new:
-                    st.markdown("#### ️ New/AI Thumbnail")
+                    st.markdown("#### 🅱️ New/AI Thumbnail")
                     st.image(new_thumb_path, use_column_width=True)
-                    
                     score_delta = new_metrics['score'] - orig_metrics['score']
-                    
                     st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
                     st.write(f"Info Density: {new_metrics['info_density']} | Contrast: {new_metrics['contrast']}")
-                    st.write(f"Faces: {new_metrics['faces']}")
-                    
+                
                 st.markdown("---")
-                if score_delta > 5:
-                    st.success(f" **Winner: New Thumbnail!** It scores {score_delta} points higher in {mode_name} mode.")
-                elif score_delta < -5:
-                    st.error(f"⚠️ **Winner: Original Thumbnail.** The new one dropped by {abs(score_delta)} points.")
-                else:
-                    st.info(f"️ **Tie Game.** Both thumbnails are statistically similar for this niche.")
-                    
+                if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** It scores {score_delta} points higher.")
+                elif score_delta < -5: st.error(f"⚠️ **Winner: Original Thumbnail.** Dropped by {abs(score_delta)} points.")
+                else: st.info(f"⚖️ **Tie Game.** Statistically similar.")
             elif orig_metrics:
                 st.markdown("#### 🅰️ Original Thumbnail Analysis")
                 st.image(thumb_path, use_column_width=True)
                 st.metric("Score", f"{orig_metrics['score']}/100")
                 st.write(f"Info Density: {orig_metrics['info_density']} | Contrast: {orig_metrics['contrast']} | Sharpness: {orig_metrics['sharpness']}")
-                st.write(f"Faces: {orig_metrics['faces']}")
 
             if not quick_thumb:
                 if title_input:
@@ -658,30 +625,25 @@ if run_analysis or quick_thumb or seo_only:
                     st.subheader("📝 Title Optimization")
                     with st.spinner("Analyzing title..."):
                         title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input)
-                    
                     if "error" not in title_analysis:
                         col_t1, col_t2, col_t3 = st.columns(3)
                         col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100")
                         col_t2.metric("Characters", title_analysis.get('character_count', 0))
                         col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
-                        
                         st.markdown("**Alternative Titles:**")
-                        for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1):
-                            st.info(f"**{i}.** {alt}")
+                        for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1): st.info(f"**{i}.** {alt}")
 
                 if title_input:
                     st.markdown("---")
                     st.subheader("🎨 AI Thumbnail Brief & Prompt")
                     with st.spinner("Generating brief..."):
                         thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input)
-                    
                     if "error" not in thumb_brief:
                         st.metric("Predicted CTR Score", f"{thumb_brief.get('thumbnail_score_prediction', 0)}/100")
                         col_b1, col_b2 = st.columns(2)
                         with col_b1:
                             st.markdown(f"**Text:** {thumb_brief.get('thumbnail_text')}")
                             st.markdown(f"**Colors:** {thumb_brief.get('color_scheme')}")
-                            st.markdown(f"**Layout:** {thumb_brief.get('layout')}")
                         with col_b2:
                             st.markdown("**Midjourney Prompt:**")
                             st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
@@ -703,21 +665,41 @@ if run_analysis or quick_thumb or seo_only:
                         boring_metrics = detect_boring_signals(video_path)
                     if "error" not in boring_metrics:
                         st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
-                        if boring_metrics['is_boring']:
-                            st.error("🚨 BORING - Add B-roll, zoom cuts, or screen recordings!")
-                        else:
-                            st.success("✅ ENGAGING - Good visual dynamics.")
+                        if boring_metrics['is_boring']: st.error("🚨 BORING - Add B-roll, zoom cuts, or screen recordings!")
+                        else: st.success("✅ ENGAGING - Good visual dynamics.")
 
                     if "GROQ_API_KEY" in st.secrets and final_transcript and final_transcript != "No transcript available.":
-                        with st.spinner("Running AI script analysis..."):
+                        with st.spinner("Generating Script & Visual Storyboard..."):
                             llm_data = analyze_script_with_llm(final_transcript, cpm)
+                        
                         if "error" not in llm_data:
                             s1, s2, s3 = st.columns(3)
                             s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
                             s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
                             s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
-                            st.info(f"**Critique:** {llm_data.get('critique')}")
-                            st.success(f"**Rewrite:** {llm_data.get('rewrite_suggestion')}")
+                            
+                            hook_score = llm_data.get("overall_hook_score", 0)
+                            st.progress(min(hook_score, 100) / 100)
+                            st.caption(f"Overall Hook Score: {hook_score}/100")
+                            
+                            st.info(f"**AI Critique:** {llm_data.get('critique')}")
+                            st.success(f"**Script Rewrite:** {llm_data.get('rewrite_suggestion')}")
+                            
+                            # === VISUAL STORYBOARD UI ===
+                            storyboard = llm_data.get('visual_storyboard', [])
+                            if storyboard:
+                                st.markdown("---")
+                                st.subheader("🎬 Visual Storyboard (What to Show)")
+                                st.caption("Follow this second-by-second blueprint to fix your Boring Score.")
+                                
+                                for shot in storyboard:
+                                    st.markdown(f"**⏱️ {shot.get('time', 'N/A')}**")
+                                    col_v, col_a = st.columns([1, 2])
+                                    with col_v:
+                                        st.markdown(f"**👁️ Visual Action:**\n{shot.get('visual_action')}")
+                                    with col_a:
+                                        st.markdown(f"**🗣️ Audio Line:**\n{shot.get('audio_line')}")
+                                    st.divider()
 
         for f in [thumb_path, video_path, new_thumb_path]:
             if f and os.path.exists(f):
