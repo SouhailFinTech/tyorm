@@ -180,39 +180,11 @@ def analyze_title_with_llm(title, transcript, topic, is_short=False):
     client = Groq(api_key=api_key)
     
     if is_short:
-        prompt = f"""
-        You are a YouTube Shorts SEO expert.
-        Current Title: "{title}"
-        Topic: {topic}
-        
-        RULES FOR SHORTS:
-        1. Must be under 50 characters.
-        2. High curiosity, NO clickbait. Use statements or bold questions.
-        3. No "How to" (Shorts titles work better with direct hooks).
-        
-        Output STRICT JSON:
-        "title_score" (int 0-100), "character_count" (int), "is_optimal_length" (bool),
-        "alternative_titles" (array of 3 strings), "recommended_keywords" (array of 5 strings)
-        """
+        prompt = f"""You are a YouTube Shorts SEO expert. Current Title: "{title}". Topic: {topic}. RULES: 1. Must be under 50 chars. 2. High curiosity, NO clickbait. 3. No "How to". Output STRICT JSON: "title_score" (int), "character_count" (int), "is_optimal_length" (bool), "alternative_titles" (array of 3 strings), "recommended_keywords" (array of 5 strings)"""
     else:
-        prompt = f"""
-        You are a YouTube SEO expert for technical/finance content.
-        Current Title: "{title}"
-        Topic: {topic}
-        Transcript Snippet: "{transcript[:300]}"
-        
-        Output STRICT JSON:
-        "title_score" (int 0-100), "character_count" (int), "is_optimal_length" (bool),
-        "alternative_titles" (array of 3 strings), "recommended_keywords" (array of 5 strings),
-        "emotional_triggers" (string), "improvement_notes" (string)
-        """
+        prompt = f"""You are a YouTube SEO expert for technical/finance content. Current Title: "{title}". Topic: {topic}. Transcript Snippet: "{transcript[:300]}". Output STRICT JSON: "title_score" (int), "character_count" (int), "is_optimal_length" (bool), "alternative_titles" (array of 3 strings), "recommended_keywords" (array of 5 strings), "emotional_triggers" (string), "improvement_notes" (string)"""
     try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5,
-            response_format={"type": "json_object"}
-        )
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.5, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
     except Exception as e:
         return {"error": str(e)}
@@ -221,28 +193,9 @@ def generate_shorts_description(title, topic):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
-    
-    prompt = f"""
-    You are a YouTube Shorts SEO expert.
-    Title: "{title}"
-    Topic: {topic}
-    
-    Generate a Shorts description. RULES:
-    1. Max 2 sentences. The algorithm reads this for SEO, viewers rarely read it.
-    2. Pack it with high-volume technical keywords.
-    3. Generate exactly 5 highly targeted hashtags.
-    
-    Output STRICT JSON:
-    "short_description" (string),
-    "hashtags" (array of 5 strings)
-    """
+    prompt = f"""You are a YouTube Shorts SEO expert. Title: "{title}". Topic: {topic}. Generate a Shorts description. RULES: 1. Max 2 sentences. 2. Pack with technical keywords. 3. Generate exactly 5 targeted hashtags. Output STRICT JSON: "short_description" (string), "hashtags" (array of 5 strings)"""
     try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            response_format={"type": "json_object"}
-        )
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.3, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
     except Exception as e:
         return {"error": str(e)}
@@ -253,40 +206,11 @@ def compress_script_with_llm(full_script, is_short=False):
     client = Groq(api_key=api_key)
     
     if is_short:
-        prompt = f"""
-        You are a Ruthless Technical Editor for YouTube Shorts.
-        
-        TASK: Compress this script to fit STRICTLY under 60 seconds.
-        
-        CRITICAL RULES:
-        1. TARGET WORD COUNT: 130 to 150 words MAX. (Speaking pace is 150 wpm).
-        2. PRESERVE ALL DATA: Keep every single number, code logic, and technical term.
-        3. CUT THE FLUFF: Remove ALL conversational filler. Start immediately with the hard data.
-        4. PACING: Make it punchy, fast, and authoritative.
-        
-        Original Script:
-        "{full_script}"
-        
-        Output STRICT JSON:
-        "original_word_count" (int), "compressed_word_count" (int), "estimated_seconds" (int),
-        "compressed_script" (string)
-        """
+        prompt = f"""You are a Ruthless Technical Editor for YouTube Shorts. TASK: Compress this script to fit STRICTLY under 60 seconds. RULES: 1. TARGET WORD COUNT: 130 to 150 words MAX. 2. PRESERVE ALL DATA. 3. CUT THE FLUFF. Original Script: "{full_script}". Output STRICT JSON: "original_word_count" (int), "compressed_word_count" (int), "estimated_seconds" (int), "compressed_script" (string)"""
     else:
-        prompt = f"""
-        You are a Ruthless Technical Editor for a top-tier Quantitative Finance YouTube channel.
-        TASK: Rewrite the script below to improve speaking pace and retention.
-        RULES: DO NOT SUMMARIZE. Rewrite the ENTIRE script line-by-line. PRESERVE ALL DATA. CUT THE FLUFF. TARGET: Reduce word count by 40-60%.
-        Original Script: "{full_script}"
-        Output STRICT JSON:
-        "original_word_count" (int), "compressed_word_count" (int), "compression_ratio" (string), "compressed_script" (string)
-        """
+        prompt = f"""You are a Ruthless Technical Editor. TASK: Rewrite to improve pacing. RULES: DO NOT SUMMARIZE. PRESERVE ALL DATA. CUT THE FLUFF. TARGET: Reduce word count by 40-60%. Original Script: "{full_script}". Output STRICT JSON: "original_word_count" (int), "compressed_word_count" (int), "compression_ratio" (string), "compressed_script" (string)"""
     try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            response_format={"type": "json_object"}
-        )
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.2, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
     except Exception as e:
         return {"error": str(e)}
@@ -297,38 +221,45 @@ def analyze_script_with_llm(problem, mechanism, payoff, cpm, is_short=False):
     client = Groq(api_key=api_key)
     
     if is_short:
-        prompt = f"""
-        You are an elite YouTube Shorts Strategist.
-        Visual Pacing: {cpm} Cuts Per Minute.
-        Elements: Problem: {problem} | Mechanism: {mechanism} | Payoff: {payoff}
-
-        TASK: Write a 45-second Shorts script.
-        RULES: 
-        1. HOOK MUST BE DELIVERED IN THE FIRST 3 SECONDS (Max 15 words).
-        2. No intros. Start IMMEDIATELY with the Problem.
-        3. Total word count MUST be under 120 words.
-        
-        Output STRICT JSON:
-        "pattern_interrupt_score" (int), "value_prop_score" (int), "jargon_score" (int),
-        "overall_hook_score" (int 0-100), "critique" (string), "script_rewrite" (string)
-        """
+        prompt = f"""You are an elite YouTube Shorts Strategist. Visual Pacing: {cpm} CPM. Elements: Problem: {problem} | Mechanism: {mechanism} | Payoff: {payoff}. TASK: Write a 45s Shorts script. RULES: 1. HOOK IN FIRST 3 SECONDS (Max 15 words). 2. No intros. 3. Total word count MUST be under 120 words. Output STRICT JSON: "pattern_interrupt_score" (int), "value_prop_score" (int), "jargon_score" (int), "overall_hook_score" (int), "critique" (string), "script_rewrite" (string)"""
     else:
-        prompt = f"""
-        You are an elite YouTube Strategist.
-        Visual Pacing: {cpm} Cuts Per Minute.
-        Elements: Problem: {problem} | Mechanism: {mechanism} | Payoff: {payoff}
-        TASK: Write a punchy, 30-second Cold Open script. Start IMMEDIATELY with the Problem. NO FLUFF.
-        Output STRICT JSON:
-        "pattern_interrupt_score" (int), "value_prop_score" (int), "jargon_score" (int),
-        "overall_hook_score" (int 0-100), "critique" (string), "script_rewrite" (string)
-        """
+        prompt = f"""You are an elite YouTube Strategist. Visual Pacing: {cpm} CPM. Elements: Problem: {problem} | Mechanism: {mechanism} | Payoff: {payoff}. TASK: Write a punchy, 30-second Cold Open script. Start IMMEDIATELY with the Problem. NO FLUFF. Output STRICT JSON: "pattern_interrupt_score" (int), "value_prop_score" (int), "jargon_score" (int), "overall_hook_score" (int), "critique" (string), "script_rewrite" (string)"""
     try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            response_format={"type": "json_object"}
-        )
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.3, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- NEW X & THREADS FUNCTIONS ---
+def generate_x_thread(topic, transcript):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    client = Groq(api_key=api_key)
+    prompt = f"""You are a top 1% Quantitative Researcher on X. Topic: {topic}. Source: "{transcript[:1500]}". TASK: Write a 6-tweet thread. RULES: 1. TWEET 1 (Hook): Under 280 chars. Contrarian take or hard data. NO "In this thread...". 2. TWEETS 2-4 (Meat): Methodology, bullet points, technical terms. 3. TWEET 5 (Reality Check): Brutal truth or final metric. 4. TWEET 6 (CTA & Trap): Follow CTA + specific question to force replies. Output STRICT JSON: "tweet_1" (string), "tweet_2" (string), "tweet_3" (string), "tweet_4" (string), "tweet_5" (string), "tweet_6" (string), "engagement_question" (string)"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.6, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
+
+def generate_threads_post(topic, transcript):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    client = Groq(api_key=api_key)
+    prompt = f"""You are a professional Quantitative Trader on Threads. Topic: {topic}. Source: "{transcript[:1000]}". TASK: Write a single, high-impact post (max 400 chars). RULES: 1. Clean, conversational, authoritative. 2. Strong hook. 3. Use line breaks. 4. Suggest an "Image Idea" to attach. 5. NO HASHTAGS. Output STRICT JSON: "post_text" (string), "image_idea" (string)"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.5, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e:
+        return {"error": str(e)}
+
+def analyze_text_hook(text, platform):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    client = Groq(api_key=api_key)
+    prompt = f"""You are a viral social media strategist for technical/finance creators. Platform: {platform}. User's First Post: "{text}". Evaluate from 0-100 based on: 1. Curiosity Gap. 2. Authority. 3. Formatting. Output STRICT JSON: "hook_score" (int), "strengths" (array of 2 strings), "weaknesses" (array of 2 strings), "rewrite_suggestion" (string)"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.4, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
     except Exception as e:
         return {"error": str(e)}
@@ -342,14 +273,22 @@ with st.sidebar:
     if "GROQ_API_KEY" not in st.secrets:
         st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
-    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator")
+    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- X & Threads Generator\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator")
 
 # FORMAT TOGGLE
-format_mode = st.radio("🎬 Content Format:", ["Long-form Video (8+ mins)", "YouTube Short (< 60s)"], horizontal=True)
+format_mode = st.radio("🎬 Content Format:", 
+                       ["Long-form Video (8+ mins)", "YouTube Short (< 60s)", "X (Twitter) Thread", "Threads Post"], 
+                       horizontal=True)
+
 is_short = (format_mode == "YouTube Short (< 60s)")
+is_x = (format_mode == "X (Twitter) Thread")
+is_threads = (format_mode == "Threads Post")
+is_text_platform = is_x or is_threads
 
 if is_short:
     st.info("📱 **Shorts Mode Active:** AI will enforce <150 words, <50 char titles, and >30 CPM pacing.")
+elif is_text_platform:
+    st.info(" **Text Platform Active:** AI will optimize for dwell time, bookmarks, and replies.")
 
 # INPUT SECTION
 st.subheader("📥 Inputs")
@@ -361,7 +300,7 @@ with col_upload:
 
 col_title, col_topic = st.columns(2)
 with col_title:
-    title_input = st.text_input("3. Video Title", placeholder="e.g., How I Backtested Bitcoin Strategies")
+    title_input = st.text_input("3. Video Title / Post Topic", placeholder="e.g., Why EMA crossovers fail on BTC")
 with col_topic:
     topic_input = st.text_input("4. Main Topic/Keyword", placeholder="e.g., Bitcoin backtesting, Python algo")
 
@@ -371,7 +310,7 @@ niche_mode = st.selectbox("Select your channel type:", ["Technical (Algo/Coding/
 st.subheader("🖼️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
-st.subheader("✍️ Your Description (For Analysis)")
+st.subheader("️ Your Description (For Analysis)")
 user_description = st.text_area("Paste YOUR existing description here...", height=100)
 
 # HOOK BUILDER INPUTS
@@ -385,7 +324,7 @@ with col_pay:
     payoff_input = st.text_area("The Payoff (The result/deliverable)", height=100)
 
 # SCRIPT COMPRESSOR INPUT
-st.subheader("✂️ Full Script Compressor")
+st.subheader("️ Full Script Compressor")
 full_script_input = st.text_area("Paste your full script here...", height=200)
 
 # BUTTONS
@@ -397,10 +336,10 @@ with col_btn2:
 
 if run_analysis or seo_only:
     if not title_input:
-        st.error("Please enter a video title.")
+        st.error("Please enter a title/topic.")
     elif not topic_input:
         st.error("Please enter the main topic.")
-    elif not url_input and not uploaded_file and not new_thumb_file and not seo_only and not problem_input and not full_script_input:
+    elif not url_input and not uploaded_file and not new_thumb_file and not seo_only and not problem_input and not full_script_input and not is_text_platform:
         st.error("Please provide at least one input.")
     else:
         mode_name = niche_mode.split(" ")[0]
@@ -443,7 +382,6 @@ if run_analysis or seo_only:
                         st.success("✅ Perfect length for a 60s Short!")
                 else:
                     col_w3.metric("Time Saved", f"~{compression_data.get('compression_ratio', '0%')}")
-                
                 st.markdown("### 📜 Compressed Script")
                 st.text_area("Compressed Version", value=compression_data.get('compressed_script', ''), height=400)
 
@@ -459,14 +397,66 @@ if run_analysis or seo_only:
                 st.markdown("### #️⃣ Hashtags")
                 st.code(" ".join(shorts_seo.get('hashtags', [])), language="text")
         
-        elif user_description and (run_analysis or seo_only) and not is_short:
+        elif user_description and (run_analysis or seo_only) and not is_short and not is_text_platform:
             st.markdown("---")
-            st.subheader(" Your Description Analysis")
+            st.subheader("📊 Your Description Analysis")
             st.info("Description analysis is optimized for Long-form. Use Shorts SEO for vertical content.")
+
+        # === X & THREADS GENERATORS ===
+        if is_text_platform and (run_analysis or seo_only):
+            st.markdown("---")
+            if is_x:
+                st.subheader("🐦 X (Twitter) Thread Generator")
+                with st.spinner("Drafting a viral quant thread..."):
+                    thread_data = generate_x_thread(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
+                if "error" in thread_data:
+                    st.error(thread_data["error"])
+                else:
+                    st.markdown("### 🧵 Your 6-Tweet Thread (Copy & Paste)")
+                    for i in range(1, 7):
+                        st.text_area(f"Tweet {i}", value=thread_data.get(f"tweet_{i}", ''), height=100, key=f"tweet_{i}_ui")
+                    st.markdown("###  The Engagement Trap (Post as a reply)")
+                    st.success(thread_data.get('engagement_question', 'N/A'))
+            elif is_threads:
+                st.subheader("🧵 Threads Post Generator")
+                with st.spinner("Drafting an aesthetic Threads post..."):
+                    threads_data = generate_threads_post(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
+                if "error" in threads_data:
+                    st.error(threads_data["error"])
+                else:
+                    st.markdown("### 📝 Your Threads Post")
+                    st.text_area("Post Text", value=threads_data.get('post_text', ''), height=200)
+                    st.markdown("### 🖼️ Visual Asset Idea")
+                    st.info(threads_data.get('image_idea', 'N/A'))
+
+            # === TEXT HOOK ANALYZER ===
+            st.markdown("---")
+            st.subheader("🎯 Text Hook Analyzer")
+            st.caption("Paste your first tweet or Threads post here to see if it's strong enough to stop the scroll.")
+            user_text_hook = st.text_area("Paste your draft hook here...", height=100, key="text_hook_input")
+            if st.button(" Analyze Text Hook", use_container_width=True):
+                if user_text_hook:
+                    with st.spinner("Analyzing text hook..."):
+                        hook_analysis = analyze_text_hook(user_text_hook, format_mode)
+                    if "error" not in hook_analysis:
+                        col_h1, col_h2 = st.columns(2)
+                        with col_h1: st.metric("Hook Score", f"{hook_analysis.get('hook_score', 0)}/100")
+                        with col_h2: st.metric("Platform", format_mode)
+                        col_h3, col_h4 = st.columns(2)
+                        with col_h3:
+                            st.markdown("**✅ Strengths:**")
+                            for s in hook_analysis.get('strengths', []): st.success(f"• {s}")
+                        with col_h4:
+                            st.markdown("**⚠️ Weaknesses:**")
+                            for w in hook_analysis.get('weaknesses', []): st.error(f"• {w}")
+                        st.markdown("**🔥 AI Rewrite Suggestion:**")
+                        st.info(hook_analysis.get('rewrite_suggestion', 'N/A'))
+                else:
+                    st.warning("Please paste a text hook to analyze.")
 
         # === THUMBNAIL A/B COMPARATOR ===
         st.markdown("---")
-        st.subheader(f"️ Thumbnail A/B Comparator ({mode_name} Mode)")
+        st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
         orig_metrics = None
         new_metrics = None
         if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name)
@@ -484,14 +474,14 @@ if run_analysis or seo_only:
                 score_delta = new_metrics['score'] - orig_metrics['score']
                 st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
             if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
-            elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
+            elif score_delta < -5: st.error(f"⚠️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
             else: st.info(f"⚖️ **Tie Game.**")
         elif orig_metrics:
             st.image(thumb_path, use_column_width=True)
             st.metric("Score", f"{orig_metrics['score']}/100")
 
         # === TITLE OPTIMIZATION ===
-        if title_input:
+        if title_input and not is_text_platform:
             st.markdown("---")
             st.subheader("📝 Title Optimization")
             with st.spinner("Analyzing title..."):
@@ -500,12 +490,12 @@ if run_analysis or seo_only:
                 col_t1, col_t2, col_t3 = st.columns(3)
                 col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100")
                 col_t2.metric("Characters", title_analysis.get('character_count', 0))
-                col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "️ Adjust")
+                col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
                 st.markdown("**Alternative Titles:**")
                 for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1): st.info(f"**{i}.** {alt}")
 
         # === HOOK & RETENTION ANALYSIS ===
-        if video_path and os.path.exists(video_path):
+        if video_path and os.path.exists(video_path) and not is_text_platform:
             st.markdown("---")
             st.subheader("🎬 Hook & Retention Analysis")
             with st.spinner("Analyzing pacing..."):
@@ -513,9 +503,8 @@ if run_analysis or seo_only:
             if "error" not in vid_metrics:
                 cpm = vid_metrics["cpm"]
                 st.metric("Visual Pacing", f"{cpm} Cuts/Min")
-                
                 if is_short:
-                    if cpm < 20: st.error(" BORING FOR SHORTS! Need 30+ CPM.")
+                    if cpm < 20: st.error("⚠️ BORING FOR SHORTS! Need 30+ CPM.")
                     elif cpm < 40: st.warning("️ Good, but aim for 40+ CPM for Shorts.")
                     else: st.success("✅ VIRAL PACING! Excellent for Shorts.")
                 else:
@@ -530,7 +519,6 @@ if run_analysis or seo_only:
                 if boring_metrics['is_boring']: st.error("🚨 BORING - Add visual variety!")
                 else: st.success("✅ ENGAGING - Good visual dynamics.")
 
-            # === HOOK BUILDER ===
             if problem_input or mechanism_input or payoff_input:
                 st.markdown("---")
                 st.subheader("🎣 AI Hook Builder")
