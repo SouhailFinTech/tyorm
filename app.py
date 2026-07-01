@@ -547,4 +547,3 @@ if run_analysis or seo_only:
             if f and os.path.exists(f):
                 try: os.remove(f)
                 except: pass
-                
