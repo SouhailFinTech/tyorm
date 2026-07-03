@@ -13,10 +13,31 @@ import urllib.request
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="QuantTube Analyzer Pro", page_icon="📈", layout="wide")
 
-# --- INITIALIZATION ---
+# --- INITIALIZATION (FIXED CASCADE LOADING) ---
 @st.cache_resource
 def load_face_cascade():
-    return cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    try:
+        # Try standard local path
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        cascade = cv2.CascadeClassifier(cascade_path)
+        if not cascade.empty():
+            return cascade
+    except Exception:
+        pass
+    
+    # Fallback: Download the XML directly if the local file is missing/corrupted
+    try:
+        url = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
+        temp_path = os.path.join(tempfile.gettempdir(), "haarcascade_frontalface_default.xml")
+        if not os.path.exists(temp_path):
+            urllib.request.urlretrieve(url, temp_path)
+        cascade = cv2.CascadeClassifier(temp_path)
+        if not cascade.empty():
+            return cascade
+    except Exception:
+        pass
+    
+    return None
 
 face_cascade = load_face_cascade()
 
@@ -70,17 +91,22 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
     vibrancy = float(np.mean([np.std(b), np.std(g), np.std(r)]))
     edges = cv2.Canny(gray, 50, 150)
     edge_density = float(np.count_nonzero(edges) / (gray.shape[0] * gray.shape[1])) * 100
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-    face_count = len(faces)
+    
+    face_count = 0
     face_centered = False
-    if face_count > 0:
-        largest_face = max(faces, key=lambda f: f[2] * f[3])
-        x, y, w, h = largest_face
-        img_h, img_w = gray.shape
-        face_center_x = (x + w/2) / img_w
-        face_center_y = (y + h/2) / img_h
-        if 0.2 < face_center_x < 0.8 and 0.2 < face_center_y < 0.8:
-            face_centered = True
+    # SAFE FACE DETECTION
+    if face_cascade is not None:
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        face_count = len(faces)
+        if face_count > 0:
+            largest_face = max(faces, key=lambda f: f[2] * f[3])
+            x, y, w, h = largest_face
+            img_h, img_w = gray.shape
+            face_center_x = (x + w/2) / img_w
+            face_center_y = (y + h/2) / img_h
+            if 0.2 < face_center_x < 0.8 and 0.2 < face_center_y < 0.8:
+                face_centered = True
+
     c_norm = min(contrast_score / 50.0, 1.0)
     s_norm = min(sharpness_score / 2000.0, 1.0)
     v_norm = min(vibrancy / 60.0, 1.0)
@@ -286,12 +312,12 @@ is_threads = (format_mode == "Threads Post")
 is_text_platform = is_x or is_threads
 
 if is_short:
-    st.info("📱 **Shorts Mode Active:** AI will enforce <150 words, <50 char titles, and >30 CPM pacing.")
+    st.info(" **Shorts Mode Active:** AI will enforce <150 words, <50 char titles, and >30 CPM pacing.")
 elif is_text_platform:
-    st.info(" **Text Platform Active:** AI will optimize for dwell time, bookmarks, and replies.")
+    st.info("📱 **Text Platform Active:** AI will optimize for dwell time, bookmarks, and replies.")
 
 # INPUT SECTION
-st.subheader("📥 Inputs")
+st.subheader(" Inputs")
 col_url, col_upload = st.columns(2)
 with col_url:
     url_input = st.text_input("1. YouTube URL (For Original Thumb & Transcript)", placeholder="https://www.youtube.com/watch?v=...")
@@ -310,11 +336,11 @@ niche_mode = st.selectbox("Select your channel type:", ["Technical (Algo/Coding/
 st.subheader("🖼️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
-st.subheader("️ Your Description (For Analysis)")
+st.subheader("✍️ Your Description (For Analysis)")
 user_description = st.text_area("Paste YOUR existing description here...", height=100)
 
 # HOOK BUILDER INPUTS
-st.subheader("🎣 Hook Builder (Provide the Ingredients)")
+st.subheader(" Hook Builder (Provide the Ingredients)")
 col_p, col_m, col_pay = st.columns(3)
 with col_p:
     problem_input = st.text_area("The Problem (Pain points, bad stats)", height=100)
@@ -324,13 +350,13 @@ with col_pay:
     payoff_input = st.text_area("The Payoff (The result/deliverable)", height=100)
 
 # SCRIPT COMPRESSOR INPUT
-st.subheader("️ Full Script Compressor")
+st.subheader("✂️ Full Script Compressor")
 full_script_input = st.text_area("Paste your full script here...", height=200)
 
 # BUTTONS
 col_btn1, col_btn2 = st.columns([3, 1])
 with col_btn1:
-    run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
+    run_analysis = st.button(" Full Analysis", type="primary", use_container_width=True)
 with col_btn2:
     seo_only = st.button("📝 SEO Only", use_container_width=True)
 
@@ -392,7 +418,7 @@ if run_analysis or seo_only:
             with st.spinner("Generating Shorts metadata..."):
                 shorts_seo = generate_shorts_description(title_input, topic_input)
             if "error" not in shorts_seo:
-                st.markdown("### 📄 Shorts Description (Copy-Paste)")
+                st.markdown("###  Shorts Description (Copy-Paste)")
                 st.text_area("Description", value=shorts_seo.get('short_description', ''), height=100)
                 st.markdown("### #️⃣ Hashtags")
                 st.code(" ".join(shorts_seo.get('hashtags', [])), language="text")
@@ -406,7 +432,7 @@ if run_analysis or seo_only:
         if is_text_platform and (run_analysis or seo_only):
             st.markdown("---")
             if is_x:
-                st.subheader("🐦 X (Twitter) Thread Generator")
+                st.subheader(" X (Twitter) Thread Generator")
                 with st.spinner("Drafting a viral quant thread..."):
                     thread_data = generate_x_thread(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
                 if "error" in thread_data:
@@ -415,10 +441,10 @@ if run_analysis or seo_only:
                     st.markdown("### 🧵 Your 6-Tweet Thread (Copy & Paste)")
                     for i in range(1, 7):
                         st.text_area(f"Tweet {i}", value=thread_data.get(f"tweet_{i}", ''), height=100, key=f"tweet_{i}_ui")
-                    st.markdown("###  The Engagement Trap (Post as a reply)")
+                    st.markdown("### 🪤 The Engagement Trap (Post as a reply)")
                     st.success(thread_data.get('engagement_question', 'N/A'))
             elif is_threads:
-                st.subheader("🧵 Threads Post Generator")
+                st.subheader(" Threads Post Generator")
                 with st.spinner("Drafting an aesthetic Threads post..."):
                     threads_data = generate_threads_post(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
                 if "error" in threads_data:
@@ -426,15 +452,15 @@ if run_analysis or seo_only:
                 else:
                     st.markdown("### 📝 Your Threads Post")
                     st.text_area("Post Text", value=threads_data.get('post_text', ''), height=200)
-                    st.markdown("### 🖼️ Visual Asset Idea")
+                    st.markdown("### ️ Visual Asset Idea")
                     st.info(threads_data.get('image_idea', 'N/A'))
 
             # === TEXT HOOK ANALYZER ===
             st.markdown("---")
-            st.subheader("🎯 Text Hook Analyzer")
+            st.subheader(" Text Hook Analyzer")
             st.caption("Paste your first tweet or Threads post here to see if it's strong enough to stop the scroll.")
             user_text_hook = st.text_area("Paste your draft hook here...", height=100, key="text_hook_input")
-            if st.button(" Analyze Text Hook", use_container_width=True):
+            if st.button("📊 Analyze Text Hook", use_container_width=True):
                 if user_text_hook:
                     with st.spinner("Analyzing text hook..."):
                         hook_analysis = analyze_text_hook(user_text_hook, format_mode)
@@ -490,7 +516,7 @@ if run_analysis or seo_only:
                 col_t1, col_t2, col_t3 = st.columns(3)
                 col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100")
                 col_t2.metric("Characters", title_analysis.get('character_count', 0))
-                col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
+                col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "️ Adjust")
                 st.markdown("**Alternative Titles:**")
                 for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1): st.info(f"**{i}.** {alt}")
 
@@ -504,7 +530,7 @@ if run_analysis or seo_only:
                 cpm = vid_metrics["cpm"]
                 st.metric("Visual Pacing", f"{cpm} Cuts/Min")
                 if is_short:
-                    if cpm < 20: st.error("⚠️ BORING FOR SHORTS! Need 30+ CPM.")
+                    if cpm < 20: st.error("️ BORING FOR SHORTS! Need 30+ CPM.")
                     elif cpm < 40: st.warning("️ Good, but aim for 40+ CPM for Shorts.")
                     else: st.success("✅ VIRAL PACING! Excellent for Shorts.")
                 else:
