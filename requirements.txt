@@ -1,5 +1,5 @@
 streamlit
-opencv-python-headless
+opencv-python
 yt-dlp
 youtube-transcript-api
 groq
