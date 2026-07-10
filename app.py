@@ -1,3 +1,7 @@
+import subprocess
+subprocess.run(["apt-get", "update"], capture_output=True)
+subprocess.run(["apt-get", "install", "-y", "libglib2.0-0"], capture_output=True)
+
 import streamlit as st
 import cv2
 import numpy as np
@@ -272,7 +276,7 @@ col_title, col_topic = st.columns(2)
 with col_title: title_input = st.text_input("3. Video Title / Post Topic", placeholder="e.g., Why EMA crossovers fail on BTC")
 with col_topic: topic_input = st.text_input("4. Main Topic/Keyword", placeholder="e.g., Bitcoin backtesting, Python algo")
 
-st.subheader(" Content Niche Mode")
+st.subheader("🎯 Content Niche Mode")
 niche_mode = st.selectbox("Select your channel type:", ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
 
 st.subheader("🖼️ Thumbnail A/B Testing")
@@ -334,11 +338,11 @@ if run_analysis or seo_only:
 
         # === SEO / DESCRIPTION ===
         if is_short and (run_analysis or seo_only):
-            st.markdown("---"); st.subheader(" Shorts SEO & Description")
+            st.markdown("---"); st.subheader("📱 Shorts SEO & Description")
             with st.spinner("Generating Shorts metadata..."): shorts_seo = generate_shorts_description(title_input, topic_input)
             if "error" not in shorts_seo:
                 st.markdown("### 📄 Shorts Description (Copy-Paste)"); st.text_area("Description", value=shorts_seo.get('short_description', ''), height=100)
-                st.markdown("### #️⃣ Hashtags"); st.code(" ".join(shorts_seo.get('hashtags', [])), language="text")
+                st.markdown("### #️ Hashtags"); st.code(" ".join(shorts_seo.get('hashtags', [])), language="text")
         elif user_description and (run_analysis or seo_only) and not is_short and not is_text_platform:
             st.markdown("---"); st.subheader("📊 Your Description Analysis"); st.info("Description analysis is optimized for Long-form. Use Shorts SEO for vertical content.")
 
@@ -346,22 +350,22 @@ if run_analysis or seo_only:
         if is_text_platform and (run_analysis or seo_only):
             st.markdown("---")
             if is_x:
-                st.subheader(" X (Twitter) Thread Generator")
+                st.subheader("🐦 X (Twitter) Thread Generator")
                 with st.spinner("Drafting a viral quant thread..."): thread_data = generate_x_thread(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
                 if "error" in thread_data: st.error(thread_data["error"])
                 else:
-                    st.markdown("### 🧵 Your 6-Tweet Thread (Copy & Paste)")
+                    st.markdown("###  Your 6-Tweet Thread (Copy & Paste)")
                     for i in range(1, 7): st.text_area(f"Tweet {i}", value=thread_data.get(f"tweet_{i}", ''), height=100, key=f"tweet_{i}_ui")
                     st.markdown("### 🪤 The Engagement Trap (Post as a reply)"); st.success(thread_data.get('engagement_question', 'N/A'))
             elif is_threads:
-                st.subheader("🧵 Threads Post Generator")
+                st.subheader(" Threads Post Generator")
                 with st.spinner("Drafting an aesthetic Threads post..."): threads_data = generate_threads_post(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
                 if "error" in threads_data: st.error(threads_data["error"])
                 else:
                     st.markdown("### 📝 Your Threads Post"); st.text_area("Post Text", value=threads_data.get('post_text', ''), height=200)
-                    st.markdown("### ️ Visual Asset Idea"); st.info(threads_data.get('image_idea', 'N/A'))
+                    st.markdown("### 🖼️ Visual Asset Idea"); st.info(threads_data.get('image_idea', 'N/A'))
             
-            st.markdown("---"); st.subheader(" Text Hook Analyzer"); st.caption("Paste your first tweet or Threads post here to see if it's strong enough to stop the scroll.")
+            st.markdown("---"); st.subheader("🎯 Text Hook Analyzer"); st.caption("Paste your first tweet or Threads post here to see if it's strong enough to stop the scroll.")
             user_text_hook = st.text_area("Paste your draft hook here...", height=100, key="text_hook_input")
             if st.button("📊 Analyze Text Hook", use_container_width=True):
                 if user_text_hook:
@@ -388,15 +392,15 @@ if run_analysis or seo_only:
         if orig_metrics and new_metrics:
             col_orig, col_new = st.columns(2)
             with col_orig: st.markdown("#### ️ Original Thumbnail"); st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
-            with col_new: st.markdown("#### ️ New/AI Thumbnail"); st.image(new_thumb_path, use_column_width=True); score_delta = new_metrics['score'] - orig_metrics['score']; st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
-            if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
+            with col_new: st.markdown("#### 🅱️ New/AI Thumbnail"); st.image(new_thumb_path, use_column_width=True); score_delta = new_metrics['score'] - orig_metrics['score']; st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
+            if score_delta > 5: st.success(f" **Winner: New Thumbnail!** +{score_delta} pts.")
             elif score_delta < -5: st.error(f"⚠️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
             else: st.info(f"⚖️ **Tie Game.**")
         elif orig_metrics: st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
 
         # === TITLE OPTIMIZATION ===
         if title_input and not is_text_platform:
-            st.markdown("---"); st.subheader(" Title Optimization")
+            st.markdown("---"); st.subheader("📝 Title Optimization")
             with st.spinner("Analyzing title..."): title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input, is_short)
             if "error" not in title_analysis:
                 col_t1, col_t2, col_t3 = st.columns(3)
@@ -413,12 +417,12 @@ if run_analysis or seo_only:
                 cpm = vid_metrics["cpm"]; st.metric("Visual Pacing", f"{cpm} Cuts/Min")
                 if is_short:
                     if cpm < 20: st.error("⚠️ BORING FOR SHORTS! Need 30+ CPM.")
-                    elif cpm < 40: st.warning("️ Good, but aim for 40+ CPM for Shorts.")
+                    elif cpm < 40: st.warning("⚠️ Good, but aim for 40+ CPM for Shorts.")
                     else: st.success("✅ VIRAL PACING! Excellent for Shorts.")
                 else:
                     if cpm < 10: st.success("✅ Good for Technical Content")
                     elif cpm < 20: st.success("✅ Excellent Pacing")
-                    else: st.warning("️ Very Fast")
+                    else: st.warning("⚠️ Very Fast")
             
             with st.spinner("Detecting boring signals..."): boring_metrics = detect_boring_signals(video_path)
             if "error" not in boring_metrics:
@@ -442,7 +446,7 @@ if run_analysis or seo_only:
                         st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
 
             if problem_input or mechanism_input or payoff_input:
-                st.markdown("---"); st.subheader(" AI Hook Builder")
+                st.markdown("---"); st.subheader("🎣 AI Hook Builder")
                 with st.spinner("Weaving your ingredients..."): llm_data = analyze_script_with_llm(problem_input, mechanism_input, payoff_input, cpm, is_short)
                 if "error" not in llm_data:
                     s1, s2, s3 = st.columns(3)
