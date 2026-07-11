@@ -10,8 +10,11 @@ from youtube_transcript_api import YouTubeTranscriptApi
 import re
 import urllib.request
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="QuantTube Analyzer Pro", page_icon="📈", layout="wide")
+# --- PAGE CONFIG & SESSION STATE ---
+st.set_page_config(page_title="QuantTube Analyzer Pro", page_icon="", layout="wide")
+
+if 'last_thumb_brief' not in st.session_state:
+    st.session_state.last_thumb_brief = {}
 
 # --- INITIALIZATION (FIXED CASCADE LOADING) ---
 @st.cache_resource
@@ -156,14 +159,89 @@ def detect_boring_signals(video_path):
 
 # --- LLM FUNCTIONS ---
 def generate_thumbnail_brief(title, transcript, topic):
+    """Generates a hyper-detailed, production-ready thumbnail prompt"""
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
-    prompt = f"""You are a YouTube thumbnail designer expert for technical/finance channels. Title: "{title}". Topic: {topic}. Transcript Snippet: "{transcript[:300]}". Output STRICT JSON: "thumbnail_text" (string, max 5 words), "color_scheme" (object with background, text, accent hex codes), "layout" (string description), "visual_elements" (array of strings), "midjourney_prompt" (string, detailed), "style" (string), "dos" (array of 3 strings), "donts" (array of 3 strings), "thumbnail_score_prediction" (int 0-100)"""
+    
+    prompt = f"""You are an elite YouTube Thumbnail Art Director specializing in technical/finance content.
+    Title: "{title}"
+    Topic: {topic}
+    Transcript Snippet: "{transcript[:300]}"
+    
+    TASK: Generate a PRODUCTION-GRADE thumbnail brief. Be extremely specific.
+    
+    OUTPUT STRICT JSON WITH THESE EXACT KEYS:
+    "thumbnail_text" (string, max 4 words, high contrast),
+    "color_palette" (object with exact hex codes for: background, primary_text, accent_highlight),
+    "composition" (string, describe rule-of-thirds placement, focal point, and negative space),
+    "visual_elements" (array of specific objects/charts/code snippets to include),
+    "midjourney_prompt" (string, MUST include: --ar 16:9, camera angle, lighting style, render engine, texture details. Example: "cinematic lighting, shallow depth of field, octane render..."),
+    "negative_prompt" (string, what to AVOID generating. e.g., "blurry text, distorted faces, cluttered background"),
+    "font_style" (string, specific typography recommendation: weight, style, color treatment),
+    "style_reference" (string, name a visual style or artist reference for consistency),
+    "dos" (array of 3 specific actionable tips),
+    "donts" (array of 3 specific things to avoid),
+    "predicted_ctr_score" (int 0-100)"""
+    
     try:
-        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.7, response_format={"type": "json_object"})
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            response_format={"type": "json_object"}
+        )
+        result = json.loads(completion.choices[0].message.content)
+        st.session_state.last_thumb_brief = result # Save for critique loop
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+def critique_and_refine_thumbnail(original_brief, cv_metrics, user_feedback=""):
+    """Analyzes WHY a thumbnail failed and generates a CORRECTED prompt"""
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    client = Groq(api_key=api_key)
+    
+    prompt = f"""You are a ruthless YouTube Thumbnail Critic and Art Director.
+    
+    ORIGINAL BRIEF GIVEN TO USER:
+    {json.dumps(original_brief, indent=2)}
+    
+    COMPUTER VISION METRICS OF GENERATED THUMBNAIL:
+    - Score: {cv_metrics.get('score', 'N/A')}/100
+    - Contrast: {cv_metrics.get('contrast', 'N/A')}
+    - Sharpness: {cv_metrics.get('sharpness', 'N/A')}
+    - Info Density: {cv_metrics.get('info_density', 'N/A')}
+    - Faces Detected: {cv_metrics.get('faces', 0)}
+    - Face Centered: {cv_metrics.get('face_centered', False)}
+    
+    USER FEEDBACK (if any): "{user_feedback}"
+    
+    TASK:
+    1. Diagnose EXACTLY why this thumbnail failed based on CV metrics vs original brief.
+    2. Identify specific mismatches (e.g., "Brief asked for high contrast but CV shows low contrast", "Text is unreadable due to low info density").
+    3. Generate a REVISED Midjourney prompt that SPECIFICALLY fixes these failures.
+    4. Provide actionable editing tips if the issue can be fixed in post-production.
+    
+    OUTPUT STRICT JSON:
+    "diagnosis" (string, brutal honest assessment of what went wrong),
+    "metric_failures" (array of strings listing specific CV metric failures),
+    "brief_mismatches" (array of strings listing where generation deviated from brief),
+    "revised_midjourney_prompt" (string, NEW prompt with explicit fixes. Add emphasis tokens like (((high contrast))) or specify exact colors),
+    "post_production_fixes" (array of strings, editable fixes like "increase brightness by 20%", "add drop shadow to text"),
+    "confidence_score" (int 0-100, how likely this revision will succeed)"""
+    
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            response_format={"type": "json_object"}
+        )
         return json.loads(completion.choices[0].message.content)
-    except Exception as e: return {"error": str(e)}
+    except Exception as e:
+        return {"error": str(e)}
 
 def analyze_title_with_llm(title, transcript, topic, is_short=False):
     api_key = st.secrets.get("GROQ_API_KEY")
@@ -249,10 +327,10 @@ st.title("📈 QuantTube Analyzer Pro")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
 
 with st.sidebar:
-    st.header("️ Settings")
+    st.header("⚙️ Settings")
     if "GROQ_API_KEY" not in st.secrets: st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
-    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- X & Threads Generator\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator")
+    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- X & Threads Generator\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator\n- Thumbnail Critique Loop")
 
 format_mode = st.radio("🎬 Content Format:", ["Long-form Video (8+ mins)", "YouTube Short (< 60s)", "X (Twitter) Thread", "Threads Post"], horizontal=True)
 is_short = (format_mode == "YouTube Short (< 60s)")
@@ -260,10 +338,10 @@ is_x = (format_mode == "X (Twitter) Thread")
 is_threads = (format_mode == "Threads Post")
 is_text_platform = is_x or is_threads
 
-if is_short: st.info(" **Shorts Mode Active:** AI will enforce <150 words, <50 char titles, and >30 CPM pacing.")
-elif is_text_platform: st.info("📱 **Text Platform Active:** AI will optimize for dwell time, bookmarks, and replies.")
+if is_short: st.info("📱 **Shorts Mode Active:** AI will enforce <150 words, <50 char titles, and >30 CPM pacing.")
+elif is_text_platform: st.info(" **Text Platform Active:** AI will optimize for dwell time, bookmarks, and replies.")
 
-st.subheader("📥 Inputs")
+st.subheader(" Inputs")
 col_url, col_upload = st.columns(2)
 with col_url: url_input = st.text_input("1. YouTube URL (For Original Thumb & Transcript)", placeholder="https://www.youtube.com/watch?v=...")
 with col_upload: uploaded_file = st.file_uploader("2. Video File (For Hook & Boring Analysis)", type=["mp4", "mov", "avi"])
@@ -275,7 +353,7 @@ with col_topic: topic_input = st.text_input("4. Main Topic/Keyword", placeholder
 st.subheader("🎯 Content Niche Mode")
 niche_mode = st.selectbox("Select your channel type:", ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
 
-st.subheader("🖼️ Thumbnail A/B Testing")
+st.subheader("️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
 st.subheader("✍️ Your Description (For Analysis)")
@@ -291,7 +369,7 @@ st.subheader("✂️ Full Script Compressor")
 full_script_input = st.text_area("Paste your full script here...", height=200)
 
 col_btn1, col_btn2 = st.columns([3, 1])
-with col_btn1: run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
+with col_btn1: run_analysis = st.button(" Full Analysis", type="primary", use_container_width=True)
 with col_btn2: seo_only = st.button("📝 SEO Only", use_container_width=True)
 
 if run_analysis or seo_only:
@@ -334,10 +412,10 @@ if run_analysis or seo_only:
 
         # === SEO / DESCRIPTION ===
         if is_short and (run_analysis or seo_only):
-            st.markdown("---"); st.subheader("📱 Shorts SEO & Description")
+            st.markdown("---"); st.subheader(" Shorts SEO & Description")
             with st.spinner("Generating Shorts metadata..."): shorts_seo = generate_shorts_description(title_input, topic_input)
             if "error" not in shorts_seo:
-                st.markdown("###  Shorts Description (Copy-Paste)"); st.text_area("Description", value=shorts_seo.get('short_description', ''), height=100)
+                st.markdown("### 📄 Shorts Description (Copy-Paste)"); st.text_area("Description", value=shorts_seo.get('short_description', ''), height=100)
                 st.markdown("### #️⃣ Hashtags"); st.code(" ".join(shorts_seo.get('hashtags', [])), language="text")
         elif user_description and (run_analysis or seo_only) and not is_short and not is_text_platform:
             st.markdown("---"); st.subheader("📊 Your Description Analysis"); st.info("Description analysis is optimized for Long-form. Use Shorts SEO for vertical content.")
@@ -346,7 +424,7 @@ if run_analysis or seo_only:
         if is_text_platform and (run_analysis or seo_only):
             st.markdown("---")
             if is_x:
-                st.subheader("🐦 X (Twitter) Thread Generator")
+                st.subheader(" X (Twitter) Thread Generator")
                 with st.spinner("Drafting a viral quant thread..."): thread_data = generate_x_thread(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
                 if "error" in thread_data: st.error(thread_data["error"])
                 else:
@@ -359,7 +437,7 @@ if run_analysis or seo_only:
                 if "error" in threads_data: st.error(threads_data["error"])
                 else:
                     st.markdown("### 📝 Your Threads Post"); st.text_area("Post Text", value=threads_data.get('post_text', ''), height=200)
-                    st.markdown("### ️ Visual Asset Idea"); st.info(threads_data.get('image_idea', 'N/A'))
+                    st.markdown("### 🖼️ Visual Asset Idea"); st.info(threads_data.get('image_idea', 'N/A'))
             
             st.markdown("---"); st.subheader("🎯 Text Hook Analyzer"); st.caption("Paste your first tweet or Threads post here to see if it's strong enough to stop the scroll.")
             user_text_hook = st.text_area("Paste your draft hook here...", height=100, key="text_hook_input")
@@ -377,14 +455,15 @@ if run_analysis or seo_only:
                         with col_h4:
                             st.markdown("**⚠️ Weaknesses:**")
                             for w in hook_analysis.get('weaknesses', []): st.error(f"• {w}")
-                        st.markdown("** AI Rewrite Suggestion:**"); st.info(hook_analysis.get('rewrite_suggestion', 'N/A'))
+                        st.markdown("**🔥 AI Rewrite Suggestion:**"); st.info(hook_analysis.get('rewrite_suggestion', 'N/A'))
                 else: st.warning("Please paste a text hook to analyze.")
 
-        # === THUMBNAIL A/B COMPARATOR ===
+        # === THUMBNAIL A/B COMPARATOR & CRITIQUE LOOP ===
         st.markdown("---"); st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
         orig_metrics = None; new_metrics = None
         if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name)
         if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
+        
         if orig_metrics and new_metrics:
             col_orig, col_new = st.columns(2)
             with col_orig: st.markdown("#### 🅰️ Original Thumbnail"); st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
@@ -392,6 +471,45 @@ if run_analysis or seo_only:
             if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
             elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
             else: st.info(f"⚖️ **Tie Game.**")
+            
+            # === NEW: CRITIQUE & REFINE SECTION ===
+            st.markdown("---")
+            st.subheader("🔍 Why Did This Thumbnail Fail?")
+            
+            user_feedback = st.text_input("Optional: What didn't you like about it?", placeholder="e.g., Text is too small, colors look washed out...", key="thumb_feedback_input")
+            
+            if st.button("️ Diagnose & Fix Prompt", type="secondary"):
+                original_brief = st.session_state.get('last_thumb_brief', {})
+                
+                if original_brief:
+                    with st.spinner("Analyzing failures and generating corrected prompt..."):
+                        critique = critique_and_refine_thumbnail(original_brief, new_metrics, user_feedback)
+                    
+                    if "error" not in critique:
+                        st.error(f"**Diagnosis:** {critique.get('diagnosis')}")
+                        
+                        col_f1, col_f2 = st.columns(2)
+                        with col_f1:
+                            st.markdown("**❌ Metric Failures:**")
+                            for fail in critique.get('metric_failures', []):
+                                st.warning(f"• {fail}")
+                        with col_f2:
+                            st.markdown("**⚠️ Brief Mismatches:**")
+                            for mismatch in critique.get('brief_mismatches', []):
+                                st.info(f"• {mismatch}")
+                        
+                        st.markdown("---")
+                        st.markdown("### ✅ REVISED Midjourney Prompt")
+                        st.code(critique.get('revised_midjourney_prompt', ''), language="text")
+                        st.caption(f"Confidence: {critique.get('confidence_score', 0)}% | This prompt explicitly addresses the failures above.")
+                        
+                        if critique.get('post_production_fixes'):
+                            st.markdown("**🎨 Or Fix In Post:**")
+                            for fix in critique.get('post_production_fixes', []):
+                                st.success(f"→ {fix}")
+                else:
+                    st.warning("Generate a thumbnail brief first before diagnosing failures.")
+                    
         elif orig_metrics: st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
 
         # === TITLE OPTIMIZATION ===
@@ -418,12 +536,12 @@ if run_analysis or seo_only:
                 else:
                     if cpm < 10: st.success("✅ Good for Technical Content")
                     elif cpm < 20: st.success("✅ Excellent Pacing")
-                    else: st.warning("️ Very Fast")
+                    else: st.warning("⚠️ Very Fast")
             
             with st.spinner("Detecting boring signals..."): boring_metrics = detect_boring_signals(video_path)
             if "error" not in boring_metrics:
                 st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
-                if boring_metrics['is_boring']: st.error(" BORING - Add visual variety!")
+                if boring_metrics['is_boring']: st.error("🚨 BORING - Add visual variety!")
                 else: st.success("✅ ENGAGING - Good visual dynamics.")
 
             # === RESTORED THUMBNAIL BRIEF SECTION ===
@@ -431,18 +549,21 @@ if run_analysis or seo_only:
                 st.markdown("---"); st.subheader("🎨 AI Thumbnail Brief & Prompt")
                 with st.spinner("Generating brief..."): thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input)
                 if "error" not in thumb_brief:
-                    st.metric("Predicted CTR Score", f"{thumb_brief.get('thumbnail_score_prediction', 0)}/100")
+                    st.metric("Predicted CTR Score", f"{thumb_brief.get('predicted_ctr_score', 0)}/100")
                     col_b1, col_b2 = st.columns(2)
                     with col_b1:
                         st.markdown(f"**Text:** {thumb_brief.get('thumbnail_text')}")
-                        st.markdown(f"**Colors:** {thumb_brief.get('color_scheme')}")
-                        st.markdown(f"**Layout:** {thumb_brief.get('layout')}")
+                        st.markdown(f"**Colors:** {thumb_brief.get('color_palette')}")
+                        st.markdown(f"**Layout:** {thumb_brief.get('composition')}")
+                        st.markdown(f"**Font:** {thumb_brief.get('font_style')}")
                     with col_b2:
                         st.markdown("**Midjourney Prompt:**")
                         st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
+                        st.markdown("**Negative Prompt:**")
+                        st.code(thumb_brief.get('negative_prompt', ''), language="text")
 
             if problem_input or mechanism_input or payoff_input:
-                st.markdown("---"); st.subheader(" AI Hook Builder")
+                st.markdown("---"); st.subheader("🎣 AI Hook Builder")
                 with st.spinner("Weaving your ingredients..."): llm_data = analyze_script_with_llm(problem_input, mechanism_input, payoff_input, cpm, is_short)
                 if "error" not in llm_data:
                     s1, s2, s3 = st.columns(3)
