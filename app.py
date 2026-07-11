@@ -330,7 +330,7 @@ with st.sidebar:
     st.header("⚙️ Settings")
     if "GROQ_API_KEY" not in st.secrets: st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
-    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- X & Threads Generator\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator\n- Thumbnail Critique Loop")
+    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- X & Threads Generator\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator\n- Automatic Thumbnail Critique Loop")
 
 format_mode = st.radio("🎬 Content Format:", ["Long-form Video (8+ mins)", "YouTube Short (< 60s)", "X (Twitter) Thread", "Threads Post"], horizontal=True)
 is_short = (format_mode == "YouTube Short (< 60s)")
@@ -339,9 +339,9 @@ is_threads = (format_mode == "Threads Post")
 is_text_platform = is_x or is_threads
 
 if is_short: st.info("📱 **Shorts Mode Active:** AI will enforce <150 words, <50 char titles, and >30 CPM pacing.")
-elif is_text_platform: st.info(" **Text Platform Active:** AI will optimize for dwell time, bookmarks, and replies.")
+elif is_text_platform: st.info("📱 **Text Platform Active:** AI will optimize for dwell time, bookmarks, and replies.")
 
-st.subheader(" Inputs")
+st.subheader("📥 Inputs")
 col_url, col_upload = st.columns(2)
 with col_url: url_input = st.text_input("1. YouTube URL (For Original Thumb & Transcript)", placeholder="https://www.youtube.com/watch?v=...")
 with col_upload: uploaded_file = st.file_uploader("2. Video File (For Hook & Boring Analysis)", type=["mp4", "mov", "avi"])
@@ -353,7 +353,7 @@ with col_topic: topic_input = st.text_input("4. Main Topic/Keyword", placeholder
 st.subheader("🎯 Content Niche Mode")
 niche_mode = st.selectbox("Select your channel type:", ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
 
-st.subheader("️ Thumbnail A/B Testing")
+st.subheader("🖼️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
 st.subheader("✍️ Your Description (For Analysis)")
@@ -369,8 +369,8 @@ st.subheader("✂️ Full Script Compressor")
 full_script_input = st.text_area("Paste your full script here...", height=200)
 
 col_btn1, col_btn2 = st.columns([3, 1])
-with col_btn1: run_analysis = st.button(" Full Analysis", type="primary", use_container_width=True)
-with col_btn2: seo_only = st.button("📝 SEO Only", use_container_width=True)
+with col_btn1: run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
+with col_btn2: seo_only = st.button(" SEO Only", use_container_width=True)
 
 if run_analysis or seo_only:
     if not title_input: st.error("Please enter a title/topic.")
@@ -412,25 +412,25 @@ if run_analysis or seo_only:
 
         # === SEO / DESCRIPTION ===
         if is_short and (run_analysis or seo_only):
-            st.markdown("---"); st.subheader(" Shorts SEO & Description")
+            st.markdown("---"); st.subheader("📱 Shorts SEO & Description")
             with st.spinner("Generating Shorts metadata..."): shorts_seo = generate_shorts_description(title_input, topic_input)
             if "error" not in shorts_seo:
                 st.markdown("### 📄 Shorts Description (Copy-Paste)"); st.text_area("Description", value=shorts_seo.get('short_description', ''), height=100)
-                st.markdown("### #️⃣ Hashtags"); st.code(" ".join(shorts_seo.get('hashtags', [])), language="text")
+                st.markdown("### #️ Hashtags"); st.code(" ".join(shorts_seo.get('hashtags', [])), language="text")
         elif user_description and (run_analysis or seo_only) and not is_short and not is_text_platform:
-            st.markdown("---"); st.subheader("📊 Your Description Analysis"); st.info("Description analysis is optimized for Long-form. Use Shorts SEO for vertical content.")
+            st.markdown("---"); st.subheader(" Your Description Analysis"); st.info("Description analysis is optimized for Long-form. Use Shorts SEO for vertical content.")
 
         # === X & THREADS GENERATORS ===
         if is_text_platform and (run_analysis or seo_only):
             st.markdown("---")
             if is_x:
-                st.subheader(" X (Twitter) Thread Generator")
+                st.subheader("🐦 X (Twitter) Thread Generator")
                 with st.spinner("Drafting a viral quant thread..."): thread_data = generate_x_thread(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
                 if "error" in thread_data: st.error(thread_data["error"])
                 else:
                     st.markdown("### 🧵 Your 6-Tweet Thread (Copy & Paste)")
                     for i in range(1, 7): st.text_area(f"Tweet {i}", value=thread_data.get(f"tweet_{i}", ''), height=100, key=f"tweet_{i}_ui")
-                    st.markdown("### 🪤 The Engagement Trap (Post as a reply)"); st.success(thread_data.get('engagement_question', 'N/A'))
+                    st.markdown("###  The Engagement Trap (Post as a reply)"); st.success(thread_data.get('engagement_question', 'N/A'))
             elif is_threads:
                 st.subheader("🧵 Threads Post Generator")
                 with st.spinner("Drafting an aesthetic Threads post..."): threads_data = generate_threads_post(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
@@ -458,7 +458,7 @@ if run_analysis or seo_only:
                         st.markdown("**🔥 AI Rewrite Suggestion:**"); st.info(hook_analysis.get('rewrite_suggestion', 'N/A'))
                 else: st.warning("Please paste a text hook to analyze.")
 
-        # === THUMBNAIL A/B COMPARATOR & CRITIQUE LOOP ===
+        # === THUMBNAIL A/B COMPARATOR & AUTOMATIC CRITIQUE ===
         st.markdown("---"); st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
         orig_metrics = None; new_metrics = None
         if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name)
@@ -466,51 +466,82 @@ if run_analysis or seo_only:
         
         if orig_metrics and new_metrics:
             col_orig, col_new = st.columns(2)
-            with col_orig: st.markdown("#### 🅰️ Original Thumbnail"); st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
-            with col_new: st.markdown("#### 🅱️ New/AI Thumbnail"); st.image(new_thumb_path, use_column_width=True); score_delta = new_metrics['score'] - orig_metrics['score']; st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
+            with col_orig: 
+                st.markdown("#### ️ Original Thumbnail")
+                st.image(thumb_path, use_column_width=True)
+                st.metric("Score", f"{orig_metrics['score']}/100")
+            with col_new: 
+                st.markdown("#### 🅱️ New/AI Thumbnail")
+                st.image(new_thumb_path, use_column_width=True)
+                score_delta = new_metrics['score'] - orig_metrics['score']
+                st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
+            
             if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
-            elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
+            elif score_delta < -5: st.error(f"⚠️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
             else: st.info(f"⚖️ **Tie Game.**")
             
-            # === NEW: CRITIQUE & REFINE SECTION ===
+            # === AUTOMATIC DIAGNOSIS (Runs Immediately) ===
             st.markdown("---")
-            st.subheader("🔍 Why Did This Thumbnail Fail?")
+            st.subheader("🔍 Automatic Failure Diagnosis")
             
-            user_feedback = st.text_input("Optional: What didn't you like about it?", placeholder="e.g., Text is too small, colors look washed out...", key="thumb_feedback_input")
+            original_brief = st.session_state.get('last_thumb_brief', {})
             
-            if st.button("️ Diagnose & Fix Prompt", type="secondary"):
-                original_brief = st.session_state.get('last_thumb_brief', {})
+            if original_brief:
+                # Run critique automatically without waiting for user input
+                with st.spinner("Analyzing why this thumbnail deviated from the brief..."):
+                    critique = critique_and_refine_thumbnail(original_brief, new_metrics, "")
                 
-                if original_brief:
-                    with st.spinner("Analyzing failures and generating corrected prompt..."):
-                        critique = critique_and_refine_thumbnail(original_brief, new_metrics, user_feedback)
+                if "error" not in critique:
+                    diagnosis = critique.get('diagnosis', 'No specific diagnosis provided.')
+                    metric_failures = critique.get('metric_failures', [])
+                    brief_mismatches = critique.get('brief_mismatches', [])
                     
-                    if "error" not in critique:
-                        st.error(f"**Diagnosis:** {critique.get('diagnosis')}")
+                    # Only show diagnosis if there are actual issues
+                    has_issues = len(metric_failures) > 0 or len(brief_mismatches) > 0
+                    
+                    if has_issues:
+                        st.warning(f"**Diagnosis:** {diagnosis}")
                         
                         col_f1, col_f2 = st.columns(2)
                         with col_f1:
-                            st.markdown("**❌ Metric Failures:**")
-                            for fail in critique.get('metric_failures', []):
-                                st.warning(f"• {fail}")
+                            if metric_failures:
+                                st.markdown("**❌ Metric Failures:**")
+                                for fail in metric_failures:
+                                    st.caption(f"• {fail}")
                         with col_f2:
-                            st.markdown("**⚠️ Brief Mismatches:**")
-                            for mismatch in critique.get('brief_mismatches', []):
-                                st.info(f"• {mismatch}")
+                            if brief_mismatches:
+                                st.markdown("**️ Brief Mismatches:**")
+                                for mismatch in brief_mismatches:
+                                    st.caption(f"• {mismatch}")
                         
                         st.markdown("---")
                         st.markdown("### ✅ REVISED Midjourney Prompt")
                         st.code(critique.get('revised_midjourney_prompt', ''), language="text")
                         st.caption(f"Confidence: {critique.get('confidence_score', 0)}% | This prompt explicitly addresses the failures above.")
                         
-                        if critique.get('post_production_fixes'):
-                            st.markdown("**🎨 Or Fix In Post:**")
-                            for fix in critique.get('post_production_fixes', []):
+                        post_fixes = critique.get('post_production_fixes', [])
+                        if post_fixes:
+                            st.markdown("**🎨 Or Fix In Post-Production:**")
+                            for fix in post_fixes:
                                 st.success(f"→ {fix}")
-                else:
-                    st.warning("Generate a thumbnail brief first before diagnosing failures.")
+                    else:
+                        st.success("✅ **No Critical Failures Detected!** This thumbnail aligns well with the original brief and CV metrics.")
+                        
+                        # Still offer refinement option
+                        st.caption("Want to refine it further? Add specific feedback below:")
+                        user_feedback = st.text_input("Optional Refinement Feedback", placeholder="e.g., Make the text bolder, change background to dark blue...", key="thumb_refinement_input")
+                        if st.button("️ Generate Refined Prompt", type="secondary"):
+                            with st.spinner("Generating refined prompt based on your feedback..."):
+                                refined_critique = critique_and_refine_thumbnail(original_brief, new_metrics, user_feedback)
+                            if "error" not in refined_critique:
+                                st.markdown("### ✅ REFINED Midjourney Prompt")
+                                st.code(refined_critique.get('revised_midjourney_prompt', ''), language="text")
+            else:
+                st.info("ℹ️ No previous thumbnail brief found in session. Generate a new brief first to enable automatic diagnosis.")
                     
-        elif orig_metrics: st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
+        elif orig_metrics: 
+            st.image(thumb_path, use_column_width=True)
+            st.metric("Score", f"{orig_metrics['score']}/100")
 
         # === TITLE OPTIMIZATION ===
         if title_input and not is_text_platform:
