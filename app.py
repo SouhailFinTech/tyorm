@@ -1,6 +1,8 @@
 import streamlit as st
 import cv2
 import numpy as np
+import pandas as pd
+import datetime
 import yt_dlp
 import tempfile
 import os
@@ -32,6 +34,164 @@ def load_face_cascade():
     return None
 
 face_cascade = load_face_cascade()
+
+# ---------------------------------------------------------------------------
+# PHASE 1: Calibration & History — closes the loop between predicted scores
+# and what actually happened on YouTube. Without this, every score in this
+# app is an untested guess. With it, you can see whether thumbnail_score
+# actually predicts CTR, and recalibrate the heuristics once there's enough
+# real data.
+#
+# NOTE ON PERSISTENCE: this stores history in a local CSV on the app's own
+# filesystem. On free hosting (e.g. Streamlit Community Cloud), that storage
+# is NOT permanent — it resets on redeploy/reboot. Download the history CSV
+# periodically (button provided below) so you don't lose it. A real database
+# (Phase 4) is the permanent fix; this is the free version that works today.
+# ---------------------------------------------------------------------------
+HISTORY_FILE = "channel_history.csv"
+HISTORY_COLUMNS = [
+    "timestamp", "video_title", "format",
+    "predicted_thumbnail_score", "predicted_title_score",
+    "predicted_hook_score", "predicted_boring_score",
+    "actual_ctr_pct", "actual_avd_pct", "actual_impressions",
+    "actual_views", "actual_subs_gained",
+]
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            df = pd.read_csv(HISTORY_FILE)
+            for col in HISTORY_COLUMNS:
+                if col not in df.columns:
+                    df[col] = None
+            return df[HISTORY_COLUMNS]
+        except Exception:
+            return pd.DataFrame(columns=HISTORY_COLUMNS)
+    return pd.DataFrame(columns=HISTORY_COLUMNS)
+
+def save_history(df):
+    df.to_csv(HISTORY_FILE, index=False)
+
+def log_prediction_row(video_title, format_label, thumb_score=None, title_score=None, hook_score=None, boring_score=None):
+    """Called right after an analysis run to record what the tool PREDICTED,
+    before any real outcome is known. Actual outcomes get filled in later via
+    CSV import once the video has real Studio data."""
+    df = load_history()
+    new_row = {col: None for col in HISTORY_COLUMNS}
+    new_row.update({
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "video_title": video_title,
+        "format": format_label,
+        "predicted_thumbnail_score": thumb_score,
+        "predicted_title_score": title_score,
+        "predicted_hook_score": hook_score,
+        "predicted_boring_score": boring_score,
+    })
+    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    save_history(df)
+    return df
+
+def parse_youtube_studio_csv(uploaded_file):
+    """Flexible parser for YouTube Studio's per-video CSV export. Column names vary
+    by export type and account locale, so this matches on substrings rather than
+    exact names instead of breaking on the first non-US-English export."""
+    try:
+        df = pd.read_csv(uploaded_file)
+    except Exception as e:
+        return None, f"Could not read CSV: {e}"
+
+    def find_col(possible_substrings):
+        for col in df.columns:
+            col_lower = str(col).lower()
+            for sub in possible_substrings:
+                if sub in col_lower:
+                    return col
+        return None
+
+    title_col = find_col(["video title", "content", "title"])
+    ctr_col = find_col(["click-through rate", "click through rate", "ctr"])
+    avd_col = find_col(["average percentage viewed", "average % viewed", "avg % viewed", "average view percentage"])
+    impressions_col = find_col(["impressions"])
+    views_col = find_col(["views"])
+    subs_col = find_col(["subscribers"])
+
+    if not title_col:
+        return None, "Could not find a video title column in this CSV — make sure it's a per-video export from YouTube Studio (Analytics > Content > Advanced mode > Export)."
+
+    parsed_rows = []
+    for _, row in df.iterrows():
+        title_val = row.get(title_col)
+        if pd.isna(title_val) or not str(title_val).strip():
+            continue
+        parsed_rows.append({
+            "video_title": str(title_val).strip(),
+            "actual_ctr_pct": row.get(ctr_col) if ctr_col else None,
+            "actual_avd_pct": row.get(avd_col) if avd_col else None,
+            "actual_impressions": row.get(impressions_col) if impressions_col else None,
+            "actual_views": row.get(views_col) if views_col else None,
+            "actual_subs_gained": row.get(subs_col) if subs_col else None,
+        })
+    return parsed_rows, None
+
+def merge_actuals_into_history(parsed_rows):
+    """Matches imported CSV rows to existing logged predictions by video title
+    (case-insensitive substring match, since Studio sometimes truncates titles).
+    Unmatched rows get appended as new history entries with no prediction data."""
+    df = load_history()
+    matched_count = 0
+    new_count = 0
+    for prow in parsed_rows:
+        title = str(prow.get("video_title", "")).strip()
+        if not title:
+            continue
+        match_idx = None
+        for idx, hrow in df.iterrows():
+            existing_title = str(hrow.get("video_title", "")).strip()
+            if existing_title and existing_title.lower() != "nan" and (
+                existing_title.lower() in title.lower() or title.lower() in existing_title.lower()
+            ):
+                match_idx = idx
+                break
+        if match_idx is not None:
+            for k in ["actual_ctr_pct", "actual_avd_pct", "actual_impressions", "actual_views", "actual_subs_gained"]:
+                if prow.get(k) is not None and not pd.isna(prow.get(k)):
+                    df.at[match_idx, k] = prow[k]
+            matched_count += 1
+        else:
+            new_row = {col: None for col in HISTORY_COLUMNS}
+            new_row.update(prow)
+            new_row["timestamp"] = datetime.datetime.now().isoformat(timespec="seconds")
+            new_row["format"] = "imported"
+            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            new_count += 1
+    save_history(df)
+    return df, matched_count, new_count
+
+def compute_calibration(df):
+    """Correlates predicted scores against actual outcomes wherever both exist
+    for the same video. This is the actual answer to 'do these scores mean
+    anything' — not a vibe, a number."""
+    results = {}
+    pairs = [
+        ("predicted_thumbnail_score", "actual_ctr_pct", "Thumbnail Score vs CTR"),
+        ("predicted_title_score", "actual_ctr_pct", "Title Score vs CTR"),
+        ("predicted_hook_score", "actual_avd_pct", "Hook Score vs Avg % Viewed"),
+        ("predicted_boring_score", "actual_avd_pct", "Boring Score vs Avg % Viewed (expect negative)"),
+    ]
+    for pred_col, actual_col, label in pairs:
+        if pred_col not in df.columns or actual_col not in df.columns:
+            results[label] = {"correlation": None, "n": 0}
+            continue
+        sub = df[[pred_col, actual_col]].copy()
+        sub[pred_col] = pd.to_numeric(sub[pred_col], errors="coerce")
+        sub[actual_col] = pd.to_numeric(sub[actual_col], errors="coerce")
+        sub = sub.dropna()
+        if len(sub) >= 3:
+            corr = np.corrcoef(sub[pred_col].astype(float), sub[actual_col].astype(float))[0, 1]
+            results[label] = {"correlation": round(float(corr), 2), "n": len(sub)}
+        else:
+            results[label] = {"correlation": None, "n": len(sub)}
+    return results
 
 # --- HELPER FUNCTIONS ---
 def extract_video_id(url):
@@ -570,7 +730,41 @@ with st.sidebar:
     st.header("️ Settings")
     if "GROQ_API_KEY" not in st.secrets: st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
-    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- Mobile Legibility Score (NEW)\n- Hook-Window Deep Analysis (NEW)\n- Subscribe Funnel Advisor (NEW)\n- X & Threads Generator\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator")
+    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- Mobile Legibility Score (NEW)\n- Hook-Window Deep Analysis (NEW)\n- Subscribe Funnel Advisor (NEW)\n- X & Threads Generator\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator\n- Calibration & History (NEW)")
+
+    st.markdown("---")
+    st.subheader("📊 Calibration & History (NEW)")
+    st.caption("Upload your real YouTube Studio CSV export to check whether this tool's scores actually predict real performance.")
+    studio_csv = st.file_uploader("Upload Studio CSV export", type=["csv"], key="studio_csv_upload")
+    if studio_csv is not None:
+        if st.button("Import CSV", key="import_csv_btn", use_container_width=True):
+            parsed, err = parse_youtube_studio_csv(studio_csv)
+            if err:
+                st.error(err)
+            elif not parsed:
+                st.warning("No usable rows found in that CSV.")
+            else:
+                _, matched, new = merge_actuals_into_history(parsed)
+                st.success(f"Imported: {matched} matched to logged predictions, {new} added as new rows.")
+
+    history_df = load_history()
+    if not history_df.empty:
+        st.markdown(f"**{len(history_df)} video(s) logged**")
+        with st.expander("View history table"):
+            st.dataframe(history_df, use_container_width=True, height=200)
+        calib = compute_calibration(history_df)
+        with st.expander("View calibration (predicted vs actual)"):
+            for label, res in calib.items():
+                if res["correlation"] is not None:
+                    st.write(f"**{label}:** r = {res['correlation']} (n={res['n']})")
+                else:
+                    st.write(f"**{label}:** not enough matched data yet (n={res['n']}, need 3+)")
+            st.caption("r close to +1 or -1 means the score is a strong predictor. r near 0 means it isn't — that's a signal to recalibrate the heuristic, not a bug.")
+        csv_bytes = history_df.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Download history CSV", csv_bytes, file_name="channel_history.csv", mime="text/csv", use_container_width=True)
+    else:
+        st.caption("No history yet — run an analysis and log it below, or import a Studio CSV.")
+    st.caption("⚠️ Stored on the app's own server storage — not permanent on free hosting. Download periodically.")
 
 format_mode = st.radio("🎬 Content Format:", ["Long-form Video (8+ mins)", "YouTube Short (< 60s)", "X (Twitter) Thread", "Threads Post"], horizontal=True)
 is_short = (format_mode == "YouTube Short (< 60s)")
@@ -832,6 +1026,12 @@ if run_analysis or seo_only:
         # Everything below this point is the core Click -> Watch -> Subscribe funnel,
         # so skip it entirely for text-platform runs.
         if not is_text_platform:
+            # Score holders for Phase 1 prediction-logging — filled in as each stage
+            # computes its score, then logged together at the end of the run.
+            log_thumb_score = None
+            log_title_score = None
+            log_hook_score = None
+            log_boring_score = None
 
             # === STAGE 0: IMPRESSIONS — how the video gets shown at all (NEW) ===
             st.markdown("---"); st.header("0️⃣ IMPRESSIONS — Getting Seen (NEW)")
@@ -895,6 +1095,7 @@ if run_analysis or seo_only:
                 orig_metrics = None; new_metrics = None
                 if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name, is_faceless)
                 if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name, is_faceless)
+                if orig_metrics and "score" in orig_metrics: log_thumb_score = orig_metrics["score"]
                 if orig_metrics and new_metrics:
                     col_orig, col_new = st.columns(2)
                     with col_orig: st.markdown("#### 🅰️ Original Thumbnail"); st.image(thumb_path, use_container_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
@@ -927,6 +1128,7 @@ if run_analysis or seo_only:
                 st.markdown("#### 📝 Title Optimization")
                 with st.spinner("Analyzing title..."): title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input, is_short)
                 if "error" not in title_analysis:
+                    log_title_score = title_analysis.get('title_score')
                     col_t1, col_t2, col_t3 = st.columns(3)
                     col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100"); col_t2.metric("Characters", title_analysis.get('character_count', 0))
                     col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
@@ -951,6 +1153,7 @@ if run_analysis or seo_only:
                     if "error" in hook_window_result:
                         st.warning(hook_window_result["error"])
                     else:
+                        log_hook_score = hook_window_result.get('overall_hook_window_score')
                         hc1, hc2, hc3, hc4 = st.columns(4)
                         hc1.metric("Curiosity Gap", f"{hook_window_result.get('curiosity_gap_score', 0)}/100")
                         hc2.metric("Promise Clarity", f"{hook_window_result.get('promise_clarity_score', 0)}/100")
@@ -980,6 +1183,7 @@ if run_analysis or seo_only:
 
                 with st.spinner("Detecting boring signals..."): boring_metrics = detect_boring_signals(video_path)
                 if "error" not in boring_metrics:
+                    log_boring_score = boring_metrics.get('boring_score')
                     st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
                     if boring_metrics['is_boring']:
                         st.error(" BORING - Add visual variety!")
@@ -1031,6 +1235,22 @@ if run_analysis or seo_only:
                     st.success(sub_result.get("hard_ask_line", "N/A"))
             else:
                 st.info("Provide a YouTube URL with captions to run the subscribe-funnel analysis (needs the full transcript).")
+
+            # === PHASE 1: Log this run's predictions to history ===
+            st.markdown("---")
+            st.subheader("💾 Log This Prediction (NEW)")
+            st.caption("Saves today's predicted scores against this video's title. Once you have real Studio numbers for this video (days/weeks later), import the Studio CSV above and it'll match by title automatically — that comparison is what tells you if these scores are actually worth trusting.")
+            log_preview_cols = st.columns(4)
+            log_preview_cols[0].metric("Thumbnail", log_thumb_score if log_thumb_score is not None else "—")
+            log_preview_cols[1].metric("Title", log_title_score if log_title_score is not None else "—")
+            log_preview_cols[2].metric("Hook", log_hook_score if log_hook_score is not None else "—")
+            log_preview_cols[3].metric("Boring", log_boring_score if log_boring_score is not None else "—")
+            if st.button("💾 Save this run to history", use_container_width=True):
+                if not title_input:
+                    st.warning("Enter a video title above before logging — it's the key used to match real Studio data to this prediction later.")
+                else:
+                    log_prediction_row(title_input, format_mode, log_thumb_score, log_title_score, log_hook_score, log_boring_score)
+                    st.success(f"Logged predictions for \"{title_input}\". Check the sidebar Calibration & History panel.")
 
         for f in [thumb_path, video_path, new_thumb_path]:
             if f and os.path.exists(f):
