@@ -81,7 +81,7 @@ def get_hook_window_text(timed_transcript, window_seconds=15):
             break
     return " ".join(words).strip()
 
-def analyze_thumbnail(image_path, niche_mode="Technical"):
+def analyze_thumbnail(image_path, niche_mode="Technical", is_faceless=False):
     if not image_path or not os.path.exists(image_path):
         return {"error": "Could not load thumbnail"}
     img = cv2.imread(image_path)
@@ -103,7 +103,7 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
     edge_density = float(np.count_nonzero(edges) / (gray.shape[0] * gray.shape[1])) * 100
 
     face_count = 0; face_centered = False
-    if face_cascade is not None:
+    if face_cascade is not None and not is_faceless:
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
         face_count = len(faces)
         if face_count > 0:
@@ -117,13 +117,20 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
     c_norm = min(contrast_score / 50.0, 1.0); s_norm = min(sharpness_score / 2000.0, 1.0)
     v_norm = min(vibrancy / 60.0, 1.0); e_norm = min(edge_density / 15.0, 1.0)
     face_pts = 1.0 if face_count > 0 else 0.0; center_pts = 1.0 if face_centered else 0.0
-    final_score = 0
-    if niche_mode == "Technical": final_score = (c_norm*20)+(s_norm*15)+(v_norm*10)+(e_norm*35)+(face_pts*15)+(center_pts*5)
+
+    if is_faceless:
+        # No face channel: the eye has nothing to anchor on except contrast, bold
+        # text/graphics (edge density), and color pop. Redistribute the ~20-30pts
+        # that would've gone to face detection into contrast + edge density + vibrancy,
+        # since those three carry the entire attention-grabbing job on a faceless thumb.
+        final_score = (c_norm*30)+(s_norm*15)+(v_norm*20)+(e_norm*35)
+    elif niche_mode == "Technical": final_score = (c_norm*20)+(s_norm*15)+(v_norm*10)+(e_norm*35)+(face_pts*15)+(center_pts*5)
     elif niche_mode == "Finance": final_score = (c_norm*20)+(s_norm*15)+(v_norm*15)+(e_norm*20)+(face_pts*25)+(center_pts*5)
     else: final_score = (c_norm*20)+(s_norm*10)+(v_norm*25)+(e_norm*10)+(face_pts*30)+(center_pts*5)
     final_score = int(round(max(0, min(100, final_score))))
     return {"score": final_score, "contrast": round(contrast_score, 1), "sharpness": round(sharpness_score, 0),
-            "vibrancy": round(vibrancy, 1), "info_density": round(edge_density, 1), "faces": face_count, "face_centered": face_centered}
+            "vibrancy": round(vibrancy, 1), "info_density": round(edge_density, 1), "faces": face_count, "face_centered": face_centered,
+            "is_faceless": is_faceless}
 
 # === NEW: Mobile Legibility Score ===
 # A thumbnail can score high full-size and still fail on the phone feed, where most
@@ -226,11 +233,18 @@ def detect_boring_signals(video_path):
     except Exception as e: return {"error": f"Analysis failed: {str(e)[:100]}"}
 
 # --- LLM FUNCTIONS ---
-def generate_thumbnail_brief(title, transcript, topic):
+def generate_thumbnail_brief(title, transcript, topic, is_faceless=False):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
-    prompt = f"""You are a YouTube thumbnail designer expert for technical/finance channels. Title: "{title}". Topic: {topic}. Transcript Snippet: "{transcript[:300]}". Output STRICT JSON: "thumbnail_text" (string, max 5 words), "color_scheme" (object with background, text, accent hex codes), "layout" (string description), "visual_elements" (array of strings), "midjourney_prompt" (string, detailed), "style" (string), "dos" (array of 3 strings), "donts" (array of 3 strings), "thumbnail_score_prediction" (int 0-100)"""
+    face_instruction = (
+        "This is a FACELESS channel — no presenter face, ever. Design around bold typography, "
+        "data visualizations (charts, candlesticks, code snippets), strong color-blocking, and a "
+        "consistent recognizable template/branding system instead of a face. Do not suggest a face or presenter."
+        if is_faceless else
+        "A presenter face can be used if it strengthens the thumbnail."
+    )
+    prompt = f"""You are a YouTube thumbnail designer expert for technical/finance channels. Title: "{title}". Topic: {topic}. Transcript Snippet: "{transcript[:300]}". {face_instruction} Output STRICT JSON: "thumbnail_text" (string, max 5 words), "color_scheme" (object with background, text, accent hex codes), "layout" (string description), "visual_elements" (array of strings), "midjourney_prompt" (string, detailed), "style" (string), "dos" (array of 3 strings), "donts" (array of 3 strings), "thumbnail_score_prediction" (int 0-100)"""
     try:
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.7, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
@@ -369,6 +383,44 @@ Output STRICT JSON: "cta_detected" (bool), "cta_timing" (string: "early"/"mid"/"
         return json.loads(completion.choices[0].message.content)
     except Exception as e: return {"error": str(e)}
 
+# === NEW: Impressions/Discovery Advisor (how the video gets found at all) ===
+# Click/Watch/Subscribe optimize a video that's ALREADY being shown to someone.
+# This step is upstream of all of that: it's what gets YouTube to show it in the
+# first place. Two real traffic sources matter here — Search (SEO) and
+# Suggested/Browse (topic-clustering + session-time signals). External and
+# notification traffic exist too but aren't something a 3-month channel controls yet.
+def generate_impressions_strategy(title, topic, transcript, niche_mode="Technical", is_faceless=False):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    client = Groq(api_key=api_key)
+    faceless_note = (
+        "The channel is faceless, so discovery strategy should lean harder on topic "
+        "consistency, a recognizable branding system, and search intent — since there's "
+        "no personality-driven audience pull to rely on early on."
+        if is_faceless else ""
+    )
+    prompt = f"""You are a YouTube growth strategist specializing in small/new technical-finance/quant channels (this one is ~3 months old and still building initial traction).
+Title: "{title}"
+Topic/Keyword: {topic}
+Niche: {niche_mode}
+Transcript snippet: "{transcript[:800] if transcript else 'N/A'}"
+{faceless_note}
+
+TASK: Give a concrete impressions/discovery plan. YouTube surfaces videos mainly through (a) Search, when the title/description/tags match what people actually type, and (b) Suggested/Browse, which clusters videos by topic similarity and rewards videos that keep people watching more of the SAME topic cluster (session time), not just this one video. New/small channels get almost nothing from (c) Notifications/subscribers yet, and (d) external traffic is channel-dependent.
+
+Output STRICT JSON:
+"search_keywords" (array of 8 realistic search phrases a target viewer would actually type into YouTube for this topic — not generic SEO fluff, actual query phrasing),
+"tags_to_use" (array of 10 YouTube tags, ordered broad-to-specific),
+"suggested_video_cluster_strategy" (string, 2-3 sentences on what adjacent/related videos or a series structure would build a topic cluster YouTube can reliably suggest this channel's videos within),
+"upload_cadence_advice" (string, 1-2 sentences realistic for a solo creator),
+"session_time_tactic" (string, one concrete tactic to increase watch-next behavior, e.g. end screens, playlists, or pinned comment linking related videos),
+"biggest_impressions_blocker" (string, the single most likely reason a 3-month-old channel in this niche is getting few impressions)
+"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.5, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e: return {"error": str(e)}
+
 # --- UI ---
 st.title("📈 QuantTube Analyzer Pro")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization — **Click → Watch → Subscribe funnel.**")
@@ -398,7 +450,11 @@ with col_title: title_input = st.text_input("3. Video Title / Post Topic", place
 with col_topic: topic_input = st.text_input("4. Main Topic/Keyword", placeholder="e.g., Bitcoin backtesting, Python algo")
 
 st.subheader("🎯 Content Niche Mode")
-niche_mode = st.selectbox("Select your channel type:", ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
+col_niche, col_faceless = st.columns([3, 1])
+with col_niche:
+    niche_mode = st.selectbox("Select your channel type:", ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
+with col_faceless:
+    is_faceless = st.checkbox("Faceless channel", value=True, help="Removes face-detection scoring from the thumbnail grader and redirects that weight to contrast/text/graphics, since there's no presenter face to score.")
 
 st.subheader("🖼️ Thumbnail A/B Testing")
 new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
@@ -517,20 +573,50 @@ if run_analysis or seo_only:
         # so skip it entirely for text-platform runs.
         if not is_text_platform:
 
+            # === STAGE 0: IMPRESSIONS — how the video gets shown at all (NEW) ===
+            st.markdown("---"); st.header("0️⃣ IMPRESSIONS — Getting Seen (NEW)")
+            st.caption("Click/Watch/Subscribe all optimize a video that's already being shown to someone. This is upstream of that: what actually gets YouTube to surface it.")
+            if title_input and topic_input:
+                with st.spinner("Building discovery plan..."):
+                    imp_result = generate_impressions_strategy(title_input, topic_input, final_transcript, mode_name, is_faceless)
+                if "error" in imp_result:
+                    st.warning(imp_result["error"])
+                else:
+                    st.error(f"**Likely blocker right now:** {imp_result.get('biggest_impressions_blocker', 'N/A')}")
+                    col_i1, col_i2 = st.columns(2)
+                    with col_i1:
+                        st.markdown("**🔎 Real search phrases to target:**")
+                        for kw in imp_result.get("search_keywords", []):
+                            st.markdown(f"- {kw}")
+                    with col_i2:
+                        st.markdown("**🏷️ Tags (broad → specific):**")
+                        st.code(", ".join(imp_result.get("tags_to_use", [])), language="text")
+                    st.markdown("**🧩 Topic-cluster / series strategy (Suggested & Browse traffic):**")
+                    st.info(imp_result.get("suggested_video_cluster_strategy", "N/A"))
+                    col_i3, col_i4 = st.columns(2)
+                    with col_i3:
+                        st.markdown("**📅 Upload cadence:**")
+                        st.write(imp_result.get("upload_cadence_advice", "N/A"))
+                    with col_i4:
+                        st.markdown("**⏱️ Session-time tactic:**")
+                        st.write(imp_result.get("session_time_tactic", "N/A"))
+            else:
+                st.info("Enter a title and topic/keyword above to generate the discovery plan.")
+
             # === STAGE 1: CLICK — THUMBNAIL A/B COMPARATOR + MOBILE LEGIBILITY ===
             st.markdown("---"); st.header("1️⃣ CLICK — Thumbnail & Title")
             st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
             orig_metrics = None; new_metrics = None
-            if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name)
-            if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
+            if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name, is_faceless)
+            if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name, is_faceless)
             if orig_metrics and new_metrics:
                 col_orig, col_new = st.columns(2)
-                with col_orig: st.markdown("#### 🅰️ Original Thumbnail"); st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
-                with col_new: st.markdown("#### 🅱️ New/AI Thumbnail"); st.image(new_thumb_path, use_column_width=True); score_delta = new_metrics['score'] - orig_metrics['score']; st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
+                with col_orig: st.markdown("#### 🅰️ Original Thumbnail"); st.image(thumb_path, use_container_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
+                with col_new: st.markdown("#### 🅱️ New/AI Thumbnail"); st.image(new_thumb_path, use_container_width=True); score_delta = new_metrics['score'] - orig_metrics['score']; st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
                 if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
                 elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
                 else: st.info(f"⚖️ **Tie Game.**")
-            elif orig_metrics: st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
+            elif orig_metrics: st.image(thumb_path, use_container_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
 
             # NEW: Mobile Legibility Score, run on whichever thumbnail(s) are present
             legibility_targets = []
@@ -610,7 +696,7 @@ if run_analysis or seo_only:
 
                 if title_input:
                     st.markdown("#### 🎨 AI Thumbnail Brief & Prompt")
-                    with st.spinner("Generating brief..."): thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input)
+                    with st.spinner("Generating brief..."): thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input, is_faceless)
                     if "error" not in thumb_brief:
                         st.metric("Predicted CTR Score", f"{thumb_brief.get('thumbnail_score_prediction', 0)}/100")
                         col_b1, col_b2 = st.columns(2)
