@@ -581,44 +581,71 @@ is_text_platform = is_x or is_threads
 if is_short: st.info(" **Shorts Mode Active:** AI will enforce <150 words, <50 char titles, and >30 CPM pacing.")
 elif is_text_platform: st.info("📱 **Text Platform Active:** AI will optimize for dwell time, bookmarks, and replies.")
 
-st.subheader("📥 Inputs")
-col_url, col_upload = st.columns(2)
-with col_url: url_input = st.text_input("1. YouTube URL (For Original Thumb & Transcript)", placeholder="https://www.youtube.com/watch?v=...")
-with col_upload: uploaded_file = st.file_uploader("2. Video File (For Hook & Boring Analysis)", type=["mp4", "mov", "avi"])
+# === Inputs — text platforms (X/Threads) get a stripped-down form. Video file upload,
+# thumbnail A/B testing, niche/faceless scoring, hook-window/hook-builder, and the
+# script compressor are all video-specific and don't apply to a text post, so they're
+# not shown here anymore instead of sitting unused above a Threads/X run. ===
+if is_text_platform:
+    st.subheader("📥 Inputs")
+    col_topic1, col_topic2 = st.columns(2)
+    with col_topic1:
+        url_input = st.text_input(
+            "Source URL (optional)",
+            placeholder="https://youtube.com/watch?v=... — pulls the transcript as source material, or leave blank"
+        )
+    with col_topic2:
+        topic_input = st.text_input("Main Topic/Keyword", placeholder="e.g., Bitcoin backtesting, Python algo")
+    title_input = st.text_input("Post Topic", placeholder="e.g., Why EMA crossovers fail on BTC")
 
-col_title, col_topic = st.columns(2)
-with col_title: title_input = st.text_input("3. Video Title / Post Topic", placeholder="e.g., Why EMA crossovers fail on BTC")
-with col_topic: topic_input = st.text_input("4. Main Topic/Keyword", placeholder="e.g., Bitcoin backtesting, Python algo")
+    # Video/thumbnail-only inputs stay defined but empty/None so the shared processing
+    # code below doesn't break — they're simply never shown or used in this mode.
+    uploaded_file = None
+    new_thumb_file = None
+    user_description = ""
+    manual_hook_input = ""
+    problem_input = mechanism_input = payoff_input = ""
+    full_script_input = ""
+    niche_mode = "Technical (Algo/Coding/Tutorials)"  # unused for X/Threads scoring, kept for shared code path
+    is_faceless = False
+else:
+    st.subheader("📥 Inputs")
+    col_url, col_upload = st.columns(2)
+    with col_url: url_input = st.text_input("1. YouTube URL (For Original Thumb & Transcript)", placeholder="https://www.youtube.com/watch?v=...")
+    with col_upload: uploaded_file = st.file_uploader("2. Video File (For Hook & Boring Analysis)", type=["mp4", "mov", "avi"])
 
-st.subheader("🎯 Content Niche Mode")
-col_niche, col_faceless = st.columns([3, 1])
-with col_niche:
-    niche_mode = st.selectbox("Select your channel type:", ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
-with col_faceless:
-    is_faceless = st.checkbox("Faceless channel", value=True, help="Removes face-detection scoring from the thumbnail grader and redirects that weight to contrast/text/graphics, since there's no presenter face to score.")
+    col_title, col_topic = st.columns(2)
+    with col_title: title_input = st.text_input("3. Video Title / Post Topic", placeholder="e.g., Why EMA crossovers fail on BTC")
+    with col_topic: topic_input = st.text_input("4. Main Topic/Keyword", placeholder="e.g., Bitcoin backtesting, Python algo")
 
-st.subheader("🖼️ Thumbnail A/B Testing")
-new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
+    st.subheader("🎯 Content Niche Mode")
+    col_niche, col_faceless = st.columns([3, 1])
+    with col_niche:
+        niche_mode = st.selectbox("Select your channel type:", ["Technical (Algo/Coding/Tutorials)", "Finance (Stocks/Crypto/Business)", "Entertainment (Vlogs/Lifestyle)"])
+    with col_faceless:
+        is_faceless = st.checkbox("Faceless channel", value=True, help="Removes face-detection scoring from the thumbnail grader and redirects that weight to contrast/text/graphics, since there's no presenter face to score.")
 
-st.subheader("✍️ Your Description (For Analysis)")
-user_description = st.text_area("Paste YOUR existing description here...", height=100)
+    st.subheader("🖼️ Thumbnail A/B Testing")
+    new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to compare", type=["jpg", "png", "jpeg"])
 
-# === NEW INPUT: manual hook-window override (in case transcript timing is unavailable) ===
-_hook_window_label_seconds = 3 if is_short else 15
-st.subheader(f"🎣 First {_hook_window_label_seconds} Seconds (Hook Window)")
-manual_hook_input = st.text_area(
-    f"Optional: paste EXACTLY what you say/show in the first {_hook_window_label_seconds} seconds. If left blank and a YouTube URL is provided, this is auto-extracted from the transcript timestamps.",
-    height=80
-)
+    st.subheader("✍️ Your Description (For Analysis)")
+    user_description = st.text_area("Paste YOUR existing description here...", height=100)
 
-st.subheader("🎣 Hook Builder (Provide the Ingredients)")
-col_p, col_m, col_pay = st.columns(3)
-with col_p: problem_input = st.text_area("The Problem (Pain points, bad stats)", height=100)
-with col_m: mechanism_input = st.text_area("The Mechanism (Your specific solution)", height=100)
-with col_pay: payoff_input = st.text_area("The Payoff (The result/deliverable)", height=100)
+    # === NEW INPUT: manual hook-window override (in case transcript timing is unavailable) ===
+    _hook_window_label_seconds = 3 if is_short else 15
+    st.subheader(f"🎣 First {_hook_window_label_seconds} Seconds (Hook Window)")
+    manual_hook_input = st.text_area(
+        f"Optional: paste EXACTLY what you say/show in the first {_hook_window_label_seconds} seconds. If left blank and a YouTube URL is provided, this is auto-extracted from the transcript timestamps.",
+        height=80
+    )
 
-st.subheader("✂️ Full Script Compressor")
-full_script_input = st.text_area("Paste your full script here...", height=200)
+    st.subheader("🎣 Hook Builder (Provide the Ingredients)")
+    col_p, col_m, col_pay = st.columns(3)
+    with col_p: problem_input = st.text_area("The Problem (Pain points, bad stats)", height=100)
+    with col_m: mechanism_input = st.text_area("The Mechanism (Your specific solution)", height=100)
+    with col_pay: payoff_input = st.text_area("The Payoff (The result/deliverable)", height=100)
+
+    st.subheader("✂️ Full Script Compressor")
+    full_script_input = st.text_area("Paste your full script here...", height=200)
 
 col_btn1, col_btn2 = st.columns([3, 1])
 with col_btn1: run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
