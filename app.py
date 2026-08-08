@@ -421,6 +421,35 @@ Output STRICT JSON:
         return json.loads(completion.choices[0].message.content)
     except Exception as e: return {"error": str(e)}
 
+# === NEW: Long-form Description SEO Analyzer (was a dead placeholder before) ===
+# Descriptions matter for Impressions (Stage 0): the first ~150 chars show in search
+# results, and YouTube's search/suggested systems parse the full text for keyword
+# relevance. This actually analyzes what you pasted instead of just telling you to
+# use the Shorts tool.
+def analyze_longform_description(description, title, topic, target_keywords=None):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    if not description:
+        return {"error": "No description provided."}
+    client = Groq(api_key=api_key)
+    kw_note = f"Target search keywords from the Impressions plan: {target_keywords}" if target_keywords else ""
+    prompt = f"""You are a YouTube SEO specialist for technical/finance/quant channels.
+Title: "{title}"
+Topic/Keyword: {topic}
+{kw_note}
+User's current description: "{description}"
+
+TASK: Evaluate this description for search/discovery performance (NOT for persuasion/CR — that's a separate job).
+1. Check the first ~150 characters specifically, since that's what shows in search results and suggested feed before "show more" is clicked — is the core keyword and hook present there, or buried later?
+2. Check keyword coverage against the topic/target keywords — is it naturally present or missing entirely?
+3. Check for a clear video summary a search algorithm can parse (not just hashtags/links dumped at the top).
+
+Output STRICT JSON: "first_150_chars_ok" (bool), "first_150_chars_issue" (string, what's wrong with the opening if anything), "keyword_coverage_score" (int 0-100), "missing_keywords" (array of strings, keywords from the topic that are absent but should be there), "rewritten_description" (string, an improved full description, 3-5 sentences plus a short keyword line, staying accurate to the original content)"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.4, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e: return {"error": str(e)}
+
 # --- UI ---
 st.title("📈 QuantTube Analyzer Pro")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization — **Click → Watch → Subscribe funnel.**")
@@ -529,7 +558,22 @@ if run_analysis or seo_only:
                 st.markdown("###  Shorts Description (Copy-Paste)"); st.text_area("Description", value=shorts_seo.get('short_description', ''), height=100)
                 st.markdown("### #️⃣ Hashtags"); st.code(" ".join(shorts_seo.get('hashtags', [])), language="text")
         elif user_description and (run_analysis or seo_only) and not is_short and not is_text_platform:
-            st.markdown("---"); st.subheader("📊 Your Description Analysis"); st.info("Description analysis is optimized for Long-form. Use Shorts SEO for vertical content.")
+            st.markdown("---"); st.subheader("📊 Your Description Analysis")
+            with st.spinner("Analyzing description SEO..."):
+                desc_result = analyze_longform_description(user_description, title_input, topic_input)
+            if "error" in desc_result:
+                st.warning(desc_result["error"])
+            else:
+                d1, d2 = st.columns(2)
+                d1.metric("First 150 Chars OK", "Yes" if desc_result.get("first_150_chars_ok") else "No")
+                d2.metric("Keyword Coverage", f"{desc_result.get('keyword_coverage_score', 0)}/100")
+                if not desc_result.get("first_150_chars_ok"):
+                    st.warning(f"**Opening issue:** {desc_result.get('first_150_chars_issue', 'N/A')}")
+                missing = desc_result.get("missing_keywords", [])
+                if missing:
+                    st.markdown("**Missing keywords:** " + ", ".join(missing))
+                st.markdown("**Rewritten description:**")
+                st.text_area("Improved Description", value=desc_result.get("rewritten_description", ""), height=150)
 
         # === X & THREADS GENERATORS ===
         if is_text_platform and (run_analysis or seo_only):
@@ -691,7 +735,9 @@ if run_analysis or seo_only:
                 with st.spinner("Detecting boring signals..."): boring_metrics = detect_boring_signals(video_path)
                 if "error" not in boring_metrics:
                     st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
-                    if boring_metrics['is_boring']: st.error(" BORING - Add visual variety!")
+                    if boring_metrics['is_boring']:
+                        st.error(" BORING - Add visual variety!")
+                        st.warning("⚠️ **This connects directly to Impressions (Stage 0).** Keywords and tags only get a video its FIRST few impressions. What happens after — retention/watch time on those first views — is what YouTube's algorithm uses to decide whether to keep showing it. A high boring score means early viewers are likely bouncing fast, which caps impressions regardless of how good your keywords are. Fixing pacing here is an impressions fix, not just a watch-time fix.")
                     else: st.success("✅ ENGAGING - Good visual dynamics.")
 
                 if title_input:
