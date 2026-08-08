@@ -81,6 +81,25 @@ def get_hook_window_text(timed_transcript, window_seconds=15):
             break
     return " ".join(words).strip()
 
+# === NEW: Shorts vertical-format check ===
+# A Short uploaded in landscape gets letterboxed/cropped badly by the Shorts player,
+# which tanks completion rate immediately — checking this takes one line and catches
+# a mistake that's otherwise invisible until after upload.
+def check_vertical_aspect(video_path):
+    if not video_path or not os.path.exists(video_path):
+        return {"error": "No video file to check"}
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return {"error": "Could not open video"}
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    if w == 0 or h == 0:
+        return {"error": "Could not read dimensions"}
+    is_vertical = h > w
+    aspect = round(w / h, 3)
+    return {"width": w, "height": h, "is_vertical": is_vertical, "aspect_ratio": aspect}
+
 def analyze_thumbnail(image_path, niche_mode="Technical", is_faceless=False):
     if not image_path or not os.path.exists(image_path):
         return {"error": "Could not load thumbnail"}
@@ -303,7 +322,7 @@ def generate_x_thread(topic, transcript):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
-    prompt = f"""You are a top 1% Quantitative Researcher on X. Topic: {topic}. Source: "{transcript[:1500]}". TASK: Write a 6-tweet thread. RULES: 1. TWEET 1 (Hook): Under 280 chars. Contrarian take or hard data. NO "In this thread...". 2. TWEETS 2-4 (Meat): Methodology, bullet points, technical terms. 3. TWEET 5 (Reality Check): Brutal truth or final metric. 4. TWEET 6 (CTA & Trap): Follow CTA + specific question to force replies. Output STRICT JSON: "tweet_1" (string), "tweet_2" (string), "tweet_3" (string), "tweet_4" (string), "tweet_5" (string), "tweet_6" (string), "engagement_question" (string)"""
+    prompt = f"""You are a top 1% Quantitative Researcher on X. Topic: {topic}. Source: "{transcript[:1500]}". TASK: Write a 6-tweet thread. RULES: 1. TWEET 1 (Hook): Under 280 chars. Contrarian take or hard data. NO "In this thread...". No external links in tweet 1 — X's algorithm suppresses reach on tweets with outbound links. 2. TWEETS 2-4 (Meat): Methodology, bullet points, technical terms. 3. TWEET 5 (Reality Check): Brutal truth or final metric. 4. TWEET 6 (CTA & Trap): Follow CTA + specific question to force replies. Output STRICT JSON: "tweet_1" (string), "tweet_2" (string), "tweet_3" (string), "tweet_4" (string), "tweet_5" (string), "tweet_6" (string), "engagement_question" (string)"""
     try:
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.6, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
@@ -329,27 +348,85 @@ def analyze_text_hook(text, platform):
         return json.loads(completion.choices[0].message.content)
     except Exception as e: return {"error": str(e)}
 
+# === NEW: Deterministic character-count validator (real Python len(), not the LLM's
+# self-reported "under 280 chars" claim, which is unverified and sometimes wrong) ===
+def validate_tweet_lengths(tweets, limit=280):
+    results = []
+    for i, t in enumerate(tweets, 1):
+        length = len(t) if t else 0
+        results.append({
+            "index": i,
+            "length": length,
+            "over_limit": length > limit,
+            "has_link": bool(re.search(r"https?://", t or "")),
+        })
+    return results
+
+def validate_threads_post_length(text, limit=500):
+    length = len(text) if text else 0
+    return {"length": length, "over_limit": length > limit}
+
+# === NEW: Thread Quality / Retention Analyzer (works on generated OR pasted-in threads) ===
+# X's algorithm rewards dwell time and reply engagement on a thread, not just the hook.
+# A thread that opens strong but loses the reader by tweet 3 gets throttled the same as
+# a weak hook would. This scores the WHOLE thread, and flags exactly where it would drop off.
+def analyze_thread_quality(tweets, platform="X (Twitter) Thread"):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    if not tweets or not any(tweets):
+        return {"error": "No thread content to analyze."}
+    client = Groq(api_key=api_key)
+    numbered = "\n".join(f"Tweet {i+1}: {t}" for i, t in enumerate(tweets) if t)
+    prompt = f"""You are a growth strategist for technical/finance/quant creators on {platform}, where the algorithm rewards dwell time (reading the whole thread) and reply engagement, not just impressions on tweet 1.
+
+Full thread:
+{numbered}
+
+TASK:
+1. Identify the single tweet in this thread MOST likely to cause a reader to stop scrolling/reading (weakest transition, jargon spike, or lost momentum) — not necessarily the first one.
+2. Score overall thread cohesion — does each tweet earn the next one, or does it feel like a list of disconnected facts?
+3. Score the final engagement question/CTA on whether it would actually generate replies (specific, answerable, mildly provocative) vs generic ("thoughts?").
+4. Flag if the thread reads as authoritative/credible for a skeptical quant audience, or too generic/AI-sounding.
+
+Output STRICT JSON: "weakest_tweet_index" (int), "weakest_tweet_reason" (string), "cohesion_score" (int 0-100), "reply_bait_score" (int 0-100), "authority_score" (int 0-100), "overall_thread_score" (int 0-100), "single_biggest_fix" (string)"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.4, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e: return {"error": str(e)}
+
+
 # === NEW: Hook Window Deep-Analysis (click -> watch) ===
 # Scores ONLY what's actually spoken/shown in the first ~15s, not the whole script.
 # This is the moment that decides whether a click becomes a view or an instant bounce.
-def analyze_hook_window_with_llm(hook_text, title, topic, niche_mode="Technical"):
+def analyze_hook_window_with_llm(hook_text, title, topic, niche_mode="Technical", is_short=False):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     if not hook_text:
-        return {"error": "No hook-window text available — paste your first-15-seconds script manually below."}
+        window_label = "3 seconds" if is_short else "15 seconds"
+        return {"error": f"No hook-window text available — paste your first-{window_label} script manually below."}
     client = Groq(api_key=api_key)
+    window_seconds = 3 if is_short else 15
+    format_note = (
+        "This is a SHORT — there is no click decision, only a swipe-away decision. The viewer decides "
+        "to keep watching in roughly the first 3 seconds, and the FIRST FRAME must already show the "
+        "payoff or a strong visual, not build up to it. A slow open, even a 2-second one, is fatal here."
+        if is_short else
+        "This is a LONG-FORM video — the viewer already clicked, so the hook's job is to confirm the "
+        "click was worth it and open a curiosity gap for the next few minutes."
+    )
     prompt = f"""You are a YouTube retention specialist for {niche_mode} finance/quant creators.
 Video Title: "{title}"
 Topic: {topic}
-EXACT words spoken in the first ~15 seconds: "{hook_text}"
+{format_note}
+EXACT words spoken/shown in the first ~{window_seconds} seconds: "{hook_text}"
 
-Score this hook window on what determines whether a viewer who just clicked keeps watching past 15s:
+Score this hook window on what determines whether a viewer keeps watching:
 1. Curiosity gap (did it open a question the viewer needs answered?)
 2. Promise clarity (is it obvious what specific payoff they'll get?)
 3. Pattern interrupt (does it avoid a generic/slow intro — "hey guys welcome back" style openers are a major retention killer)
 4. Relevance match to the title (does the hook deliver on what the title/thumbnail promised, avoiding bait-and-switch?)
 
-Output STRICT JSON: "curiosity_gap_score" (int 0-100), "promise_clarity_score" (int 0-100), "pattern_interrupt_score" (int 0-100), "title_match_score" (int 0-100), "overall_hook_window_score" (int 0-100), "biggest_risk" (string, the single most likely reason a viewer would bounce in these 15s), "rewritten_hook" (string, a stronger version of these first 15 seconds)"""
+Output STRICT JSON: "curiosity_gap_score" (int 0-100), "promise_clarity_score" (int 0-100), "pattern_interrupt_score" (int 0-100), "title_match_score" (int 0-100), "overall_hook_window_score" (int 0-100), "biggest_risk" (string, the single most likely reason a viewer would bounce in this window), "rewritten_hook" (string, a stronger version of this hook window)"""
     try:
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.4, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
@@ -359,23 +436,37 @@ Output STRICT JSON: "curiosity_gap_score" (int 0-100), "promise_clarity_score" (
 # Your original tool had zero logic for the actual conversion goal you stated: turning
 # viewers into subscribers. This detects CTA presence/timing and generates CTAs that
 # fit a quant/finance audience (who bounce off hypey generic "smash that subscribe" asks).
-def analyze_subscribe_funnel(transcript, title, topic, niche_mode="Technical"):
+def analyze_subscribe_funnel(transcript, title, topic, niche_mode="Technical", is_short=False):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     if not transcript:
         return {"error": "No transcript available to analyze."}
     client = Groq(api_key=api_key)
+    if is_short:
+        format_note = (
+            "This is a SHORT — there is essentially no room for a spoken mid-video ask without killing "
+            "pacing (Shorts run under 60s and every second of narration competes with completion rate). "
+            "A subscribe ask here should be a brief ON-SCREEN TEXT overlay in the last 1-2 seconds "
+            "(not spoken), timed to land right after the payoff/punchline, plus optionally one word "
+            "in the caption/hashtag line. Do NOT recommend a spoken CTA line that would eat into pacing."
+        )
+    else:
+        format_note = (
+            "This is LONG-FORM — there's room for both a brief spoken soft-ask after a value payoff "
+            "mid-video, and a slightly longer hard-ask in the outro."
+        )
     prompt = f"""You are a YouTube channel growth strategist specializing in technical/finance/quant creators, where audiences are skeptical of hypey asks and respond better to earned, specific CTAs.
 
 Video Title: "{title}"
 Topic: {topic}
+{format_note}
 Full transcript (may be truncated): "{transcript[:3000]}"
 
-TASK: Analyze this transcript for subscribe-conversion mechanics only.
-1. Detect whether there is any verbal subscribe/follow ask in the transcript, and roughly where (early/mid/late/none).
+TASK: Analyze this transcript for subscribe-conversion mechanics only, matched to the format above.
+1. Detect whether there is any verbal or on-screen subscribe/follow ask in the transcript, and roughly where (early/mid/late/none).
 2. Judge the "value-before-ask" ratio: does the creator deliver real, specific value (a number, a method, a concrete insight) BEFORE any ask, or does the ask come too early/generic?
 3. Flag if the ask is generic/hypey ("smash that subscribe button") vs specific and earned (tied to a concrete reason to come back).
-4. Generate a SOFT-ASK line (placed right after a value payoff mid-video) and a HARD-ASK line (for the outro), both written for a technical/quant/finance audience — no hype language, tie the ask to a specific, credible reason to subscribe (e.g. a concrete recurring series, a specific edge/insight they'll miss otherwise).
+4. Generate a SOFT-ASK line and a HARD-ASK line appropriate to the format above (for Shorts: short on-screen text, not spoken; for long-form: spoken lines), both written for a technical/quant/finance audience — no hype language, tied to a specific, credible reason to subscribe.
 
 Output STRICT JSON: "cta_detected" (bool), "cta_timing" (string: "early"/"mid"/"late"/"none"), "cta_style" (string: "generic_hype"/"specific_earned"/"none"), "value_before_ask_score" (int 0-100), "diagnosis" (string, 1-2 sentences on what's likely hurting sub-conversion here), "soft_ask_line" (string), "hard_ask_line" (string)"""
     try:
@@ -389,7 +480,7 @@ Output STRICT JSON: "cta_detected" (bool), "cta_timing" (string: "early"/"mid"/"
 # first place. Two real traffic sources matter here — Search (SEO) and
 # Suggested/Browse (topic-clustering + session-time signals). External and
 # notification traffic exist too but aren't something a 3-month channel controls yet.
-def generate_impressions_strategy(title, topic, transcript, niche_mode="Technical", is_faceless=False):
+def generate_impressions_strategy(title, topic, transcript, niche_mode="Technical", is_faceless=False, is_short=False):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
@@ -399,22 +490,43 @@ def generate_impressions_strategy(title, topic, transcript, niche_mode="Technica
         "no personality-driven audience pull to rely on early on."
         if is_faceless else ""
     )
+    if is_short:
+        format_context = (
+            "This is a YOUTUBE SHORT (<60s), which is discovered almost entirely differently from "
+            "long-form: the Shorts feed is a swipe-driven autoplay surface, not a search/browse-grid "
+            "surface. Impressions here are driven overwhelmingly by (a) completion rate / rewatches "
+            "(does the viewer watch to the end, or better, loop it), (b) shares and sends, not clicks, "
+            "and (c) hashtags in the description, which carry more weight here than full tag lists do "
+            "for long-form. Search still matters but is secondary. Title/thumbnail CTR is nearly "
+            "irrelevant since there's no click decision in the Shorts feed — only a swipe-away decision "
+            "in the first ~1-2 seconds."
+        )
+        extra_fields = (
+            '"loopability_tactic" (string, one specific way to make the last second connect back to '
+            'the first second so the video rewatches instead of ending flatly), '
+            '"hashtags_to_use" (array of 5 hashtags, since these matter more than long-tags for Shorts discovery), '
+        )
+    else:
+        format_context = "This is a LONG-FORM video, discovered mainly through Search and Suggested/Browse (topic-clustering + session time)."
+        extra_fields = ""
+
     prompt = f"""You are a YouTube growth strategist specializing in small/new technical-finance/quant channels (this one is ~3 months old and still building initial traction).
 Title: "{title}"
 Topic/Keyword: {topic}
 Niche: {niche_mode}
 Transcript snippet: "{transcript[:800] if transcript else 'N/A'}"
 {faceless_note}
+{format_context}
 
-TASK: Give a concrete impressions/discovery plan. YouTube surfaces videos mainly through (a) Search, when the title/description/tags match what people actually type, and (b) Suggested/Browse, which clusters videos by topic similarity and rewards videos that keep people watching more of the SAME topic cluster (session time), not just this one video. New/small channels get almost nothing from (c) Notifications/subscribers yet, and (d) external traffic is channel-dependent.
+TASK: Give a concrete impressions/discovery plan matched to this format.
 
 Output STRICT JSON:
 "search_keywords" (array of 8 realistic search phrases a target viewer would actually type into YouTube for this topic — not generic SEO fluff, actual query phrasing),
 "tags_to_use" (array of 10 YouTube tags, ordered broad-to-specific),
-"suggested_video_cluster_strategy" (string, 2-3 sentences on what adjacent/related videos or a series structure would build a topic cluster YouTube can reliably suggest this channel's videos within),
+{extra_fields}"suggested_video_cluster_strategy" (string, 2-3 sentences on what adjacent/related videos or a series structure would build a topic cluster this platform can reliably suggest this channel's videos within),
 "upload_cadence_advice" (string, 1-2 sentences realistic for a solo creator),
-"session_time_tactic" (string, one concrete tactic to increase watch-next behavior, e.g. end screens, playlists, or pinned comment linking related videos),
-"biggest_impressions_blocker" (string, the single most likely reason a 3-month-old channel in this niche is getting few impressions)
+"session_time_tactic" (string, one concrete tactic to increase watch-next/rewatch behavior appropriate to this format),
+"biggest_impressions_blocker" (string, the single most likely reason a 3-month-old channel in this niche is getting few impressions on this format)
 """
     try:
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.5, response_format={"type": "json_object"})
@@ -492,9 +604,10 @@ st.subheader("✍️ Your Description (For Analysis)")
 user_description = st.text_area("Paste YOUR existing description here...", height=100)
 
 # === NEW INPUT: manual hook-window override (in case transcript timing is unavailable) ===
-st.subheader("🎣 First 15 Seconds (Hook Window)")
+_hook_window_label_seconds = 3 if is_short else 15
+st.subheader(f"🎣 First {_hook_window_label_seconds} Seconds (Hook Window)")
 manual_hook_input = st.text_area(
-    "Optional: paste EXACTLY what you say/show in the first 15 seconds. If left blank and a YouTube URL is provided, this is auto-extracted from the transcript timestamps.",
+    f"Optional: paste EXACTLY what you say/show in the first {_hook_window_label_seconds} seconds. If left blank and a YouTube URL is provided, this is auto-extracted from the transcript timestamps.",
     height=80
 )
 
@@ -583,16 +696,92 @@ if run_analysis or seo_only:
                 with st.spinner("Drafting a viral quant thread..."): thread_data = generate_x_thread(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
                 if "error" in thread_data: st.error(thread_data["error"])
                 else:
+                    generated_tweets = [thread_data.get(f"tweet_{i}", "") for i in range(1, 7)]
+
+                    # NEW: real character-count + link-penalty validation (deterministic,
+                    # not the LLM's self-reported "under 280 chars" claim)
+                    length_checks = validate_tweet_lengths(generated_tweets)
                     st.markdown("### 🧵 Your 6-Tweet Thread (Copy & Paste)")
-                    for i in range(1, 7): st.text_area(f"Tweet {i}", value=thread_data.get(f"tweet_{i}", ''), height=100, key=f"tweet_{i}_ui")
+                    for i, tweet in enumerate(generated_tweets, 1):
+                        check = length_checks[i - 1]
+                        label = f"Tweet {i}  —  {check['length']}/280 chars"
+                        if check["over_limit"]:
+                            label += "  ⚠️ OVER LIMIT"
+                        if check["has_link"]:
+                            label += "  🔗 has link (reach penalty risk)"
+                        st.text_area(label, value=tweet, height=100, key=f"tweet_{i}_ui")
+                    if any(c["over_limit"] for c in length_checks):
+                        st.error("⚠️ One or more tweets exceed 280 characters and will be rejected or truncated on posting — trim before publishing.")
+                    if any(c["has_link"] for c in length_checks[:1]):
+                        st.warning("🔗 Tweet 1 contains a link — X's algorithm measurably suppresses reach on tweets with outbound links. Move the link to a reply instead.")
                     st.markdown("### 🪤 The Engagement Trap (Post as a reply)"); st.success(thread_data.get('engagement_question', 'N/A'))
+
+                    # NEW: whole-thread quality/retention scoring, not just the hook
+                    st.markdown("#### 📊 Thread Quality Analysis (NEW)")
+                    with st.spinner("Scoring thread cohesion and drop-off risk..."):
+                        quality = analyze_thread_quality(generated_tweets, "X (Twitter) Thread")
+                    if "error" in quality:
+                        st.warning(quality["error"])
+                    else:
+                        q1, q2, q3, q4 = st.columns(4)
+                        q1.metric("Cohesion", f"{quality.get('cohesion_score', 0)}/100")
+                        q2.metric("Reply-Bait Quality", f"{quality.get('reply_bait_score', 0)}/100")
+                        q3.metric("Authority", f"{quality.get('authority_score', 0)}/100")
+                        q4.metric("Overall", f"{quality.get('overall_thread_score', 0)}/100")
+                        st.error(f"**Weakest tweet: #{quality.get('weakest_tweet_index', '?')}** — {quality.get('weakest_tweet_reason', 'N/A')}")
+                        st.info(f"**Biggest fix:** {quality.get('single_biggest_fix', 'N/A')}")
+
             elif is_threads:
                 st.subheader("🧵 Threads Post Generator")
                 with st.spinner("Drafting an aesthetic Threads post..."): threads_data = generate_threads_post(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
                 if "error" in threads_data: st.error(threads_data["error"])
                 else:
-                    st.markdown("### 📝 Your Threads Post"); st.text_area("Post Text", value=threads_data.get('post_text', ''), height=200)
+                    post_text = threads_data.get('post_text', '')
+                    length_check = validate_threads_post_length(post_text)
+                    label = f"Post Text — {length_check['length']}/500 chars"
+                    if length_check["over_limit"]: label += "  ⚠️ OVER LIMIT"
+                    st.markdown("### 📝 Your Threads Post"); st.text_area(label, value=post_text, height=200)
+                    if length_check["over_limit"]:
+                        st.error("⚠️ This post exceeds Threads' 500-character limit and will be rejected on posting.")
                     st.markdown("### ️ Visual Asset Idea"); st.info(threads_data.get('image_idea', 'N/A'))
+
+            st.markdown("---")
+            st.subheader("🎯 Optimize Your Own Draft (paste existing content)")
+            st.caption("Already have a thread or post written? Paste it here to get the same scoring the generator above gets — this works on your own drafts, not just AI-generated ones.")
+            if is_x:
+                pasted_thread = st.text_area(
+                    "Paste your thread, one tweet per line...",
+                    height=150, key="pasted_thread_input"
+                )
+                if st.button("📊 Analyze My Thread", use_container_width=True):
+                    if pasted_thread.strip():
+                        pasted_tweets = [line.strip() for line in pasted_thread.split("\n") if line.strip()]
+                        checks = validate_tweet_lengths(pasted_tweets)
+                        for i, (tweet, check) in enumerate(zip(pasted_tweets, checks), 1):
+                            flag = "  ⚠️ OVER 280" if check["over_limit"] else ""
+                            flag += "  🔗 link" if check["has_link"] else ""
+                            st.text_area(f"Tweet {i} — {check['length']} chars{flag}", value=tweet, height=60, key=f"pasted_tweet_{i}")
+                        with st.spinner("Scoring your thread..."):
+                            quality = analyze_thread_quality(pasted_tweets, "X (Twitter) Thread")
+                        if "error" not in quality:
+                            q1, q2, q3, q4 = st.columns(4)
+                            q1.metric("Cohesion", f"{quality.get('cohesion_score', 0)}/100")
+                            q2.metric("Reply-Bait Quality", f"{quality.get('reply_bait_score', 0)}/100")
+                            q3.metric("Authority", f"{quality.get('authority_score', 0)}/100")
+                            q4.metric("Overall", f"{quality.get('overall_thread_score', 0)}/100")
+                            st.error(f"**Weakest tweet: #{quality.get('weakest_tweet_index', '?')}** — {quality.get('weakest_tweet_reason', 'N/A')}")
+                            st.info(f"**Biggest fix:** {quality.get('single_biggest_fix', 'N/A')}")
+                    else:
+                        st.warning("Paste a thread first.")
+            elif is_threads:
+                pasted_post = st.text_area("Paste your Threads post...", height=150, key="pasted_threads_input")
+                if st.button("📊 Analyze My Post", use_container_width=True):
+                    if pasted_post.strip():
+                        check = validate_threads_post_length(pasted_post)
+                        flag = "  ⚠️ OVER 500" if check["over_limit"] else ""
+                        st.metric("Length", f"{check['length']} chars{flag}")
+                    else:
+                        st.warning("Paste a post first.")
 
             st.markdown("---"); st.subheader("🎯 Text Hook Analyzer"); st.caption("Paste your first tweet or Threads post here to see if it's strong enough to stop the scroll.")
             user_text_hook = st.text_area("Paste your draft hook here...", height=100, key="text_hook_input")
@@ -622,7 +811,7 @@ if run_analysis or seo_only:
             st.caption("Click/Watch/Subscribe all optimize a video that's already being shown to someone. This is upstream of that: what actually gets YouTube to surface it.")
             if title_input and topic_input:
                 with st.spinner("Building discovery plan..."):
-                    imp_result = generate_impressions_strategy(title_input, topic_input, final_transcript, mode_name, is_faceless)
+                    imp_result = generate_impressions_strategy(title_input, topic_input, final_transcript, mode_name, is_faceless, is_short)
                 if "error" in imp_result:
                     st.warning(imp_result["error"])
                 else:
@@ -633,54 +822,80 @@ if run_analysis or seo_only:
                         for kw in imp_result.get("search_keywords", []):
                             st.markdown(f"- {kw}")
                     with col_i2:
-                        st.markdown("**🏷️ Tags (broad → specific):**")
-                        st.code(", ".join(imp_result.get("tags_to_use", [])), language="text")
-                    st.markdown("**🧩 Topic-cluster / series strategy (Suggested & Browse traffic):**")
+                        if is_short:
+                            st.markdown("**#️⃣ Hashtags (drive more here than tags for Shorts):**")
+                            st.code(" ".join(f"#{h.lstrip('#')}" for h in imp_result.get("hashtags_to_use", [])), language="text")
+                        else:
+                            st.markdown("**🏷️ Tags (broad → specific):**")
+                            st.code(", ".join(imp_result.get("tags_to_use", [])), language="text")
+                    if is_short and imp_result.get("loopability_tactic"):
+                        st.markdown("**🔁 Loopability tactic (make it rewatch, not just finish):**")
+                        st.success(imp_result.get("loopability_tactic"))
+                    st.markdown("**🧩 Topic-cluster / series strategy:**")
                     st.info(imp_result.get("suggested_video_cluster_strategy", "N/A"))
                     col_i3, col_i4 = st.columns(2)
                     with col_i3:
                         st.markdown("**📅 Upload cadence:**")
                         st.write(imp_result.get("upload_cadence_advice", "N/A"))
                     with col_i4:
-                        st.markdown("**⏱️ Session-time tactic:**")
+                        st.markdown("**⏱️ Session-time / rewatch tactic:**")
                         st.write(imp_result.get("session_time_tactic", "N/A"))
             else:
                 st.info("Enter a title and topic/keyword above to generate the discovery plan.")
 
-            # === STAGE 1: CLICK — THUMBNAIL A/B COMPARATOR + MOBILE LEGIBILITY ===
-            st.markdown("---"); st.header("1️⃣ CLICK — Thumbnail & Title")
-            st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
-            orig_metrics = None; new_metrics = None
-            if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name, is_faceless)
-            if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name, is_faceless)
-            if orig_metrics and new_metrics:
-                col_orig, col_new = st.columns(2)
-                with col_orig: st.markdown("#### 🅰️ Original Thumbnail"); st.image(thumb_path, use_container_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
-                with col_new: st.markdown("#### 🅱️ New/AI Thumbnail"); st.image(new_thumb_path, use_container_width=True); score_delta = new_metrics['score'] - orig_metrics['score']; st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
-                if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
-                elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
-                else: st.info(f"⚖️ **Tie Game.**")
-            elif orig_metrics: st.image(thumb_path, use_container_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
-
-            # NEW: Mobile Legibility Score, run on whichever thumbnail(s) are present
-            legibility_targets = []
-            if thumb_path and os.path.exists(thumb_path): legibility_targets.append(("Original", thumb_path))
-            if new_thumb_path and os.path.exists(new_thumb_path): legibility_targets.append(("New/AI", new_thumb_path))
-            if legibility_targets:
-                st.markdown("#### 📱 Mobile Legibility Score (NEW)")
-                st.caption("Most impressions happen in the mobile feed at ~120x67px. A thumbnail that looks great full-size can still fail here — this tests it directly.")
-                leg_cols = st.columns(len(legibility_targets))
-                for col, (label, path) in zip(leg_cols, legibility_targets):
-                    leg = analyze_mobile_legibility(path)
-                    with col:
-                        st.markdown(f"**{label}**")
-                        if "error" in leg:
-                            st.error(leg["error"])
+            # === STAGE 1: CLICK — THUMBNAIL & TITLE (long-form) / SWIPE CHECK (Shorts) ===
+            st.markdown("---")
+            if is_short:
+                st.header("1️⃣ SWIPE — Cover Frame & Vertical Format")
+                st.caption("Shorts have no click decision — there's no thumbnail-driven CTR the way long-form has. This stage instead checks the two things that actually matter before a viewer even sees your hook: the video is genuinely vertical, and the auto-picked cover frame isn't broken.")
+                if video_path and os.path.exists(video_path):
+                    aspect_result = check_vertical_aspect(video_path)
+                    if "error" in aspect_result:
+                        st.warning(aspect_result["error"])
+                    else:
+                        if aspect_result["is_vertical"]:
+                            st.success(f"✅ Vertical format confirmed ({aspect_result['width']}×{aspect_result['height']}, ratio {aspect_result['aspect_ratio']}).")
                         else:
-                            st.metric("Legibility Score", f"{leg['legibility_score']}/100")
-                            st.caption(leg["verdict"])
+                            st.error(f"❌ This video is {aspect_result['width']}×{aspect_result['height']} — landscape/square, not vertical. The Shorts player will letterbox or crop it, which hurts completion rate before your hook even gets a chance. Re-export at 1080×1920 (9:16).")
+                else:
+                    st.info("Upload the video file above to check vertical format.")
+                if thumb_path and os.path.exists(thumb_path):
+                    st.markdown("You can still set a custom cover image, but it's a minor lever here — put your effort into the first-3-seconds hook below instead.")
+                    st.image(thumb_path, use_container_width=True, caption="Current cover/thumbnail reference")
+            else:
+                st.header("1️⃣ CLICK — Thumbnail & Title")
+                st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
+                orig_metrics = None; new_metrics = None
+                if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name, is_faceless)
+                if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name, is_faceless)
+                if orig_metrics and new_metrics:
+                    col_orig, col_new = st.columns(2)
+                    with col_orig: st.markdown("#### 🅰️ Original Thumbnail"); st.image(thumb_path, use_container_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
+                    with col_new: st.markdown("#### 🅱️ New/AI Thumbnail"); st.image(new_thumb_path, use_container_width=True); score_delta = new_metrics['score'] - orig_metrics['score']; st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
+                    if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
+                    elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
+                    else: st.info(f"⚖️ **Tie Game.**")
+                elif orig_metrics: st.image(thumb_path, use_container_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
 
-            # === TITLE OPTIMIZATION ===
+                # NEW: Mobile Legibility Score, run on whichever thumbnail(s) are present
+                legibility_targets = []
+                if thumb_path and os.path.exists(thumb_path): legibility_targets.append(("Original", thumb_path))
+                if new_thumb_path and os.path.exists(new_thumb_path): legibility_targets.append(("New/AI", new_thumb_path))
+                if legibility_targets:
+                    st.markdown("#### 📱 Mobile Legibility Score (NEW)")
+                    st.caption("Most impressions happen in the mobile feed at ~120x67px. A thumbnail that looks great full-size can still fail here — this tests it directly.")
+                    leg_cols = st.columns(len(legibility_targets))
+                    for col, (label, path) in zip(leg_cols, legibility_targets):
+                        leg = analyze_mobile_legibility(path)
+                        with col:
+                            st.markdown(f"**{label}**")
+                            if "error" in leg:
+                                st.error(leg["error"])
+                            else:
+                                st.metric("Legibility Score", f"{leg['legibility_score']}/100")
+                                st.caption(leg["verdict"])
+
+            # === TITLE OPTIMIZATION (both formats) ===
             if title_input:
                 st.markdown("#### 📝 Title Optimization")
                 with st.spinner("Analyzing title..."): title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input, is_short)
@@ -694,14 +909,18 @@ if run_analysis or seo_only:
             # === STAGE 2: WATCH — HOOK WINDOW + PACING + BORING SIGNALS ===
             st.markdown("---"); st.header("2️⃣ WATCH — Hook & Retention")
 
-            # NEW: Hook Window Deep-Analysis (first ~15s only)
-            hook_window_text = manual_hook_input.strip() if manual_hook_input.strip() else get_hook_window_text(timed_transcript)
+            # NEW: Hook Window Deep-Analysis (first ~3s for Shorts, ~15s for long-form)
+            hook_window_seconds = 3 if is_short else 15
+            hook_window_text = manual_hook_input.strip() if manual_hook_input.strip() else get_hook_window_text(timed_transcript, window_seconds=hook_window_seconds)
             if title_input:
-                st.subheader("🎣 First-15-Seconds Hook Analysis (NEW)")
-                st.caption("Scored on ONLY the words spoken in the click->watch window — not the full script.")
+                st.subheader(f"🎣 First-{hook_window_seconds}-Seconds Hook Analysis (NEW)")
+                if is_short:
+                    st.caption("For Shorts this window IS the swipe-away decision — there's no click to fall back on, so this score matters more here than the thumbnail ever would.")
+                else:
+                    st.caption("Scored on ONLY the words spoken in the click->watch window — not the full script.")
                 if hook_window_text:
                     with st.spinner("Scoring the hook window..."):
-                        hook_window_result = analyze_hook_window_with_llm(hook_window_text, title_input, topic_input, mode_name)
+                        hook_window_result = analyze_hook_window_with_llm(hook_window_text, title_input, topic_input, mode_name, is_short)
                     if "error" in hook_window_result:
                         st.warning(hook_window_result["error"])
                     else:
@@ -714,7 +933,7 @@ if run_analysis or seo_only:
                         st.error(f"**Biggest bounce risk:** {hook_window_result.get('biggest_risk', 'N/A')}")
                         st.success(f"**Rewritten hook:** {hook_window_result.get('rewritten_hook', 'N/A')}")
                 else:
-                    st.info("No hook-window text found. Provide a YouTube URL with captions, or paste your first-15-seconds script above.")
+                    st.info(f"No hook-window text found. Provide a YouTube URL with captions, or paste your first-{hook_window_seconds}-seconds script above.")
 
             # === HOOK & PACING ANALYSIS (video upload) ===
             cpm = None
@@ -769,7 +988,7 @@ if run_analysis or seo_only:
             st.caption("Your only real conversion goal on YouTube. This checks if/when/how you ask, and generates CTAs that fit a skeptical quant/finance audience.")
             if final_transcript and final_transcript != "No transcript available.":
                 with st.spinner("Analyzing subscribe-conversion mechanics..."):
-                    sub_result = analyze_subscribe_funnel(final_transcript, title_input, topic_input, mode_name)
+                    sub_result = analyze_subscribe_funnel(final_transcript, title_input, topic_input, mode_name, is_short)
                 if "error" in sub_result:
                     st.warning(sub_result["error"])
                 else:
