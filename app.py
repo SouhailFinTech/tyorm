@@ -21,7 +21,7 @@ def load_face_cascade():
         cascade = cv2.CascadeClassifier(cascade_path)
         if not cascade.empty(): return cascade
     except Exception: pass
-    
+
     try:
         url = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
         temp_path = os.path.join(tempfile.gettempdir(), "haarcascade_frontalface_default.xml")
@@ -60,6 +60,27 @@ def fetch_thumbnail_and_transcript(url):
         thumb_path = None
     return thumb_path, transcript_text[:2500], None
 
+# === NEW: also return raw timed transcript segments (needed for hook-window isolation) ===
+def fetch_timed_transcript(url):
+    video_id = extract_video_id(url)
+    if not video_id: return None
+    try:
+        return YouTubeTranscriptApi.get_transcript(video_id)
+    except Exception:
+        return None
+
+def get_hook_window_text(timed_transcript, window_seconds=15):
+    """Isolate only the words spoken in the first N seconds — the true click->watch hook window."""
+    if not timed_transcript:
+        return ""
+    words = []
+    for seg in timed_transcript:
+        if seg.get('start', 0) <= window_seconds:
+            words.append(seg.get('text', ''))
+        else:
+            break
+    return " ".join(words).strip()
+
 def analyze_thumbnail(image_path, niche_mode="Technical"):
     if not image_path or not os.path.exists(image_path):
         return {"error": "Could not load thumbnail"}
@@ -80,7 +101,7 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
     vibrancy = float(np.mean([np.std(b), np.std(g), np.std(r)]))
     edges = cv2.Canny(gray, 50, 150)
     edge_density = float(np.count_nonzero(edges) / (gray.shape[0] * gray.shape[1])) * 100
-    
+
     face_count = 0; face_centered = False
     if face_cascade is not None:
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
@@ -103,6 +124,56 @@ def analyze_thumbnail(image_path, niche_mode="Technical"):
     final_score = int(round(max(0, min(100, final_score))))
     return {"score": final_score, "contrast": round(contrast_score, 1), "sharpness": round(sharpness_score, 0),
             "vibrancy": round(vibrancy, 1), "info_density": round(edge_density, 1), "faces": face_count, "face_centered": face_centered}
+
+# === NEW: Mobile Legibility Score ===
+# A thumbnail can score high full-size and still fail on the phone feed, where most
+# impressions actually happen. This simulates real browse sizes and measures whether
+# there's still enough contrast/edge structure to read at a glance.
+def analyze_mobile_legibility(image_path):
+    if not image_path or not os.path.exists(image_path):
+        return {"error": "Could not load thumbnail"}
+    img = cv2.imread(image_path)
+    if img is None:
+        return {"error": "Failed to decode image"}
+
+    # Real-world render sizes: desktop grid (~336x188) and mobile feed (~120x67)
+    sizes = {"desktop_grid": (336, 188), "mobile_feed": (120, 67)}
+    results = {}
+    for label, (w, h) in sizes.items():
+        small = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+        gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        # Edge density after downscale = proxy for "is there still readable structure"
+        edges_small = cv2.Canny(gray_small, 50, 150)
+        edge_density_small = float(np.count_nonzero(edges_small) / (w * h)) * 100
+        # Local contrast after downscale = proxy for "does text/subject still pop"
+        contrast_small = float(np.std(gray_small))
+        results[label] = {
+            "edge_density": round(edge_density_small, 2),
+            "contrast": round(contrast_small, 1),
+        }
+
+    mobile = results["mobile_feed"]
+    # Empirically: legible small thumbnails keep edge_density > ~4 and contrast > ~35
+    # after aggressive downscale. Below that, text/faces blur into mush.
+    edge_ok = mobile["edge_density"] >= 4.0
+    contrast_ok = mobile["contrast"] >= 35.0
+    legibility_score = int(round(
+        min(mobile["edge_density"] / 8.0, 1.0) * 50 +
+        min(mobile["contrast"] / 60.0, 1.0) * 50
+    ))
+    if legibility_score >= 70:
+        verdict = "✅ Reads clearly at mobile-feed size."
+    elif legibility_score >= 45:
+        verdict = "⚠️ Borderline — simplify: fewer elements, bigger contrast between subject and background."
+    else:
+        verdict = "❌ Likely illegible in the mobile feed — this is probably costing you CTR on 60-70% of impressions."
+
+    return {
+        "legibility_score": legibility_score,
+        "desktop_grid": results["desktop_grid"],
+        "mobile_feed": mobile,
+        "verdict": verdict,
+    }
 
 def analyze_hook_video(video_path):
     if not video_path or not os.path.exists(video_path): return {"error": "Could not load video file"}
@@ -244,15 +315,69 @@ def analyze_text_hook(text, platform):
         return json.loads(completion.choices[0].message.content)
     except Exception as e: return {"error": str(e)}
 
+# === NEW: Hook Window Deep-Analysis (click -> watch) ===
+# Scores ONLY what's actually spoken/shown in the first ~15s, not the whole script.
+# This is the moment that decides whether a click becomes a view or an instant bounce.
+def analyze_hook_window_with_llm(hook_text, title, topic, niche_mode="Technical"):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    if not hook_text:
+        return {"error": "No hook-window text available — paste your first-15-seconds script manually below."}
+    client = Groq(api_key=api_key)
+    prompt = f"""You are a YouTube retention specialist for {niche_mode} finance/quant creators.
+Video Title: "{title}"
+Topic: {topic}
+EXACT words spoken in the first ~15 seconds: "{hook_text}"
+
+Score this hook window on what determines whether a viewer who just clicked keeps watching past 15s:
+1. Curiosity gap (did it open a question the viewer needs answered?)
+2. Promise clarity (is it obvious what specific payoff they'll get?)
+3. Pattern interrupt (does it avoid a generic/slow intro — "hey guys welcome back" style openers are a major retention killer)
+4. Relevance match to the title (does the hook deliver on what the title/thumbnail promised, avoiding bait-and-switch?)
+
+Output STRICT JSON: "curiosity_gap_score" (int 0-100), "promise_clarity_score" (int 0-100), "pattern_interrupt_score" (int 0-100), "title_match_score" (int 0-100), "overall_hook_window_score" (int 0-100), "biggest_risk" (string, the single most likely reason a viewer would bounce in these 15s), "rewritten_hook" (string, a stronger version of these first 15 seconds)"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.4, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e: return {"error": str(e)}
+
+# === NEW: Subscribe Funnel Advisor (watch -> subscribe) ===
+# Your original tool had zero logic for the actual conversion goal you stated: turning
+# viewers into subscribers. This detects CTA presence/timing and generates CTAs that
+# fit a quant/finance audience (who bounce off hypey generic "smash that subscribe" asks).
+def analyze_subscribe_funnel(transcript, title, topic, niche_mode="Technical"):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    if not transcript:
+        return {"error": "No transcript available to analyze."}
+    client = Groq(api_key=api_key)
+    prompt = f"""You are a YouTube channel growth strategist specializing in technical/finance/quant creators, where audiences are skeptical of hypey asks and respond better to earned, specific CTAs.
+
+Video Title: "{title}"
+Topic: {topic}
+Full transcript (may be truncated): "{transcript[:3000]}"
+
+TASK: Analyze this transcript for subscribe-conversion mechanics only.
+1. Detect whether there is any verbal subscribe/follow ask in the transcript, and roughly where (early/mid/late/none).
+2. Judge the "value-before-ask" ratio: does the creator deliver real, specific value (a number, a method, a concrete insight) BEFORE any ask, or does the ask come too early/generic?
+3. Flag if the ask is generic/hypey ("smash that subscribe button") vs specific and earned (tied to a concrete reason to come back).
+4. Generate a SOFT-ASK line (placed right after a value payoff mid-video) and a HARD-ASK line (for the outro), both written for a technical/quant/finance audience — no hype language, tie the ask to a specific, credible reason to subscribe (e.g. a concrete recurring series, a specific edge/insight they'll miss otherwise).
+
+Output STRICT JSON: "cta_detected" (bool), "cta_timing" (string: "early"/"mid"/"late"/"none"), "cta_style" (string: "generic_hype"/"specific_earned"/"none"), "value_before_ask_score" (int 0-100), "diagnosis" (string, 1-2 sentences on what's likely hurting sub-conversion here), "soft_ask_line" (string), "hard_ask_line" (string)"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.4, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e: return {"error": str(e)}
+
 # --- UI ---
 st.title("📈 QuantTube Analyzer Pro")
-st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization.")
+st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization — **Click → Watch → Subscribe funnel.**")
 
 with st.sidebar:
     st.header("️ Settings")
     if "GROQ_API_KEY" not in st.secrets: st.warning("No Groq API Key in Secrets.")
     st.markdown("---")
-    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- X & Threads Generator\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator")
+    st.info("**Pro Features:**\n- Long-form & Shorts Mode\n- Mobile Legibility Score (NEW)\n- Hook-Window Deep Analysis (NEW)\n- Subscribe Funnel Advisor (NEW)\n- X & Threads Generator\n- Niche-Aware Scoring\n- Hook Builder\n- Script Compressor\n- A/B Comparator")
 
 format_mode = st.radio("🎬 Content Format:", ["Long-form Video (8+ mins)", "YouTube Short (< 60s)", "X (Twitter) Thread", "Threads Post"], horizontal=True)
 is_short = (format_mode == "YouTube Short (< 60s)")
@@ -281,6 +406,13 @@ new_thumb_file = st.file_uploader("5. Upload your NEW/AI-Generated Thumbnail to 
 st.subheader("✍️ Your Description (For Analysis)")
 user_description = st.text_area("Paste YOUR existing description here...", height=100)
 
+# === NEW INPUT: manual hook-window override (in case transcript timing is unavailable) ===
+st.subheader("🎣 First 15 Seconds (Hook Window)")
+manual_hook_input = st.text_area(
+    "Optional: paste EXACTLY what you say/show in the first 15 seconds. If left blank and a YouTube URL is provided, this is auto-extracted from the transcript timestamps.",
+    height=80
+)
+
 st.subheader("🎣 Hook Builder (Provide the Ingredients)")
 col_p, col_m, col_pay = st.columns(3)
 with col_p: problem_input = st.text_area("The Problem (Pain points, bad stats)", height=100)
@@ -297,15 +429,16 @@ with col_btn2: seo_only = st.button("📝 SEO Only", use_container_width=True)
 if run_analysis or seo_only:
     if not title_input: st.error("Please enter a title/topic.")
     elif not topic_input: st.error("Please enter the main topic.")
-    elif not url_input and not uploaded_file and not new_thumb_file and not seo_only and not problem_input and not full_script_input and not is_text_platform:
+    elif not url_input and not uploaded_file and not new_thumb_file and not seo_only and not problem_input and not full_script_input and not is_text_platform and not manual_hook_input:
         st.error("Please provide at least one input.")
     else:
         mode_name = niche_mode.split(" ")[0]
         with st.spinner("Processing..."):
-            thumb_path = None; transcript = ""
+            thumb_path = None; transcript = ""; timed_transcript = None
             if url_input:
                 thumb_path, transcript, url_error = fetch_thumbnail_and_transcript(url_input)
                 if url_error: st.error(url_error)
+                timed_transcript = fetch_timed_transcript(url_input)
             video_path = None
             if uploaded_file:
                 temp_dir = tempfile.gettempdir(); video_path = os.path.join(temp_dir, "uploaded_hook_video.mp4")
@@ -316,7 +449,7 @@ if run_analysis or seo_only:
                 with open(new_thumb_path, "wb") as f: f.write(new_thumb_file.getbuffer())
 
         final_transcript = transcript
-        
+
         # === SCRIPT COMPRESSOR ===
         if full_script_input:
             st.markdown("---"); st.subheader("✂️ Script Pacing Compressor")
@@ -360,7 +493,7 @@ if run_analysis or seo_only:
                 else:
                     st.markdown("### 📝 Your Threads Post"); st.text_area("Post Text", value=threads_data.get('post_text', ''), height=200)
                     st.markdown("### ️ Visual Asset Idea"); st.info(threads_data.get('image_idea', 'N/A'))
-            
+
             st.markdown("---"); st.subheader("🎯 Text Hook Analyzer"); st.caption("Paste your first tweet or Threads post here to see if it's strong enough to stop the scroll.")
             user_text_hook = st.text_area("Paste your draft hook here...", height=100, key="text_hook_input")
             if st.button("📊 Analyze Text Hook", use_container_width=True):
@@ -380,76 +513,146 @@ if run_analysis or seo_only:
                         st.markdown("** AI Rewrite Suggestion:**"); st.info(hook_analysis.get('rewrite_suggestion', 'N/A'))
                 else: st.warning("Please paste a text hook to analyze.")
 
-        # === THUMBNAIL A/B COMPARATOR ===
-        st.markdown("---"); st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
-        orig_metrics = None; new_metrics = None
-        if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name)
-        if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
-        if orig_metrics and new_metrics:
-            col_orig, col_new = st.columns(2)
-            with col_orig: st.markdown("#### 🅰️ Original Thumbnail"); st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
-            with col_new: st.markdown("#### 🅱️ New/AI Thumbnail"); st.image(new_thumb_path, use_column_width=True); score_delta = new_metrics['score'] - orig_metrics['score']; st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
-            if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
-            elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
-            else: st.info(f"⚖️ **Tie Game.**")
-        elif orig_metrics: st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
+        # Everything below this point is the core Click -> Watch -> Subscribe funnel,
+        # so skip it entirely for text-platform runs.
+        if not is_text_platform:
 
-        # === TITLE OPTIMIZATION ===
-        if title_input and not is_text_platform:
-            st.markdown("---"); st.subheader("📝 Title Optimization")
-            with st.spinner("Analyzing title..."): title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input, is_short)
-            if "error" not in title_analysis:
-                col_t1, col_t2, col_t3 = st.columns(3)
-                col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100"); col_t2.metric("Characters", title_analysis.get('character_count', 0))
-                col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
-                st.markdown("**Alternative Titles:**")
-                for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1): st.info(f"**{i}.** {alt}")
+            # === STAGE 1: CLICK — THUMBNAIL A/B COMPARATOR + MOBILE LEGIBILITY ===
+            st.markdown("---"); st.header("1️⃣ CLICK — Thumbnail & Title")
+            st.subheader(f"🖼️ Thumbnail A/B Comparator ({mode_name} Mode)")
+            orig_metrics = None; new_metrics = None
+            if thumb_path and os.path.exists(thumb_path): orig_metrics = analyze_thumbnail(thumb_path, mode_name)
+            if new_thumb_path and os.path.exists(new_thumb_path): new_metrics = analyze_thumbnail(new_thumb_path, mode_name)
+            if orig_metrics and new_metrics:
+                col_orig, col_new = st.columns(2)
+                with col_orig: st.markdown("#### 🅰️ Original Thumbnail"); st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
+                with col_new: st.markdown("#### 🅱️ New/AI Thumbnail"); st.image(new_thumb_path, use_column_width=True); score_delta = new_metrics['score'] - orig_metrics['score']; st.metric("Score", f"{new_metrics['score']}/100", delta=f"{score_delta} pts vs Original")
+                if score_delta > 5: st.success(f"🏆 **Winner: New Thumbnail!** +{score_delta} pts.")
+                elif score_delta < -5: st.error(f"️ **Winner: Original Thumbnail.** -{abs(score_delta)} pts.")
+                else: st.info(f"⚖️ **Tie Game.**")
+            elif orig_metrics: st.image(thumb_path, use_column_width=True); st.metric("Score", f"{orig_metrics['score']}/100")
 
-        # === HOOK & RETENTION ANALYSIS ===
-        if video_path and os.path.exists(video_path) and not is_text_platform:
-            st.markdown("---"); st.subheader("🎬 Hook & Retention Analysis")
-            with st.spinner("Analyzing pacing..."): vid_metrics = analyze_hook_video(video_path)
-            if "error" not in vid_metrics:
-                cpm = vid_metrics["cpm"]; st.metric("Visual Pacing", f"{cpm} Cuts/Min")
-                if is_short:
-                    if cpm < 20: st.error("⚠️ BORING FOR SHORTS! Need 30+ CPM.")
-                    elif cpm < 40: st.warning("️ Good, but aim for 40+ CPM for Shorts.")
-                    else: st.success("✅ VIRAL PACING! Excellent for Shorts.")
-                else:
-                    if cpm < 10: st.success("✅ Good for Technical Content")
-                    elif cpm < 20: st.success("✅ Excellent Pacing")
-                    else: st.warning("️ Very Fast")
-            
-            with st.spinner("Detecting boring signals..."): boring_metrics = detect_boring_signals(video_path)
-            if "error" not in boring_metrics:
-                st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
-                if boring_metrics['is_boring']: st.error(" BORING - Add visual variety!")
-                else: st.success("✅ ENGAGING - Good visual dynamics.")
+            # NEW: Mobile Legibility Score, run on whichever thumbnail(s) are present
+            legibility_targets = []
+            if thumb_path and os.path.exists(thumb_path): legibility_targets.append(("Original", thumb_path))
+            if new_thumb_path and os.path.exists(new_thumb_path): legibility_targets.append(("New/AI", new_thumb_path))
+            if legibility_targets:
+                st.markdown("#### 📱 Mobile Legibility Score (NEW)")
+                st.caption("Most impressions happen in the mobile feed at ~120x67px. A thumbnail that looks great full-size can still fail here — this tests it directly.")
+                leg_cols = st.columns(len(legibility_targets))
+                for col, (label, path) in zip(leg_cols, legibility_targets):
+                    leg = analyze_mobile_legibility(path)
+                    with col:
+                        st.markdown(f"**{label}**")
+                        if "error" in leg:
+                            st.error(leg["error"])
+                        else:
+                            st.metric("Legibility Score", f"{leg['legibility_score']}/100")
+                            st.caption(leg["verdict"])
 
-            # === RESTORED THUMBNAIL BRIEF SECTION ===
+            # === TITLE OPTIMIZATION ===
             if title_input:
-                st.markdown("---"); st.subheader("🎨 AI Thumbnail Brief & Prompt")
-                with st.spinner("Generating brief..."): thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input)
-                if "error" not in thumb_brief:
-                    st.metric("Predicted CTR Score", f"{thumb_brief.get('thumbnail_score_prediction', 0)}/100")
-                    col_b1, col_b2 = st.columns(2)
-                    with col_b1:
-                        st.markdown(f"**Text:** {thumb_brief.get('thumbnail_text')}")
-                        st.markdown(f"**Colors:** {thumb_brief.get('color_scheme')}")
-                        st.markdown(f"**Layout:** {thumb_brief.get('layout')}")
-                    with col_b2:
-                        st.markdown("**Midjourney Prompt:**")
-                        st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
+                st.markdown("#### 📝 Title Optimization")
+                with st.spinner("Analyzing title..."): title_analysis = analyze_title_with_llm(title_input, final_transcript, topic_input, is_short)
+                if "error" not in title_analysis:
+                    col_t1, col_t2, col_t3 = st.columns(3)
+                    col_t1.metric("Title Score", f"{title_analysis.get('title_score', 0)}/100"); col_t2.metric("Characters", title_analysis.get('character_count', 0))
+                    col_t3.metric("Length", "✅ Optimal" if title_analysis.get('is_optimal_length') else "⚠️ Adjust")
+                    st.markdown("**Alternative Titles:**")
+                    for i, alt in enumerate(title_analysis.get('alternative_titles', []), 1): st.info(f"**{i}.** {alt}")
 
-            if problem_input or mechanism_input or payoff_input:
-                st.markdown("---"); st.subheader(" AI Hook Builder")
-                with st.spinner("Weaving your ingredients..."): llm_data = analyze_script_with_llm(problem_input, mechanism_input, payoff_input, cpm, is_short)
-                if "error" not in llm_data:
-                    s1, s2, s3 = st.columns(3)
-                    s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
-                    s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
-                    s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
-                    st.success(llm_data.get('script_rewrite', 'N/A'))
+            # === STAGE 2: WATCH — HOOK WINDOW + PACING + BORING SIGNALS ===
+            st.markdown("---"); st.header("2️⃣ WATCH — Hook & Retention")
+
+            # NEW: Hook Window Deep-Analysis (first ~15s only)
+            hook_window_text = manual_hook_input.strip() if manual_hook_input.strip() else get_hook_window_text(timed_transcript)
+            if title_input:
+                st.subheader("🎣 First-15-Seconds Hook Analysis (NEW)")
+                st.caption("Scored on ONLY the words spoken in the click->watch window — not the full script.")
+                if hook_window_text:
+                    with st.spinner("Scoring the hook window..."):
+                        hook_window_result = analyze_hook_window_with_llm(hook_window_text, title_input, topic_input, mode_name)
+                    if "error" in hook_window_result:
+                        st.warning(hook_window_result["error"])
+                    else:
+                        hc1, hc2, hc3, hc4 = st.columns(4)
+                        hc1.metric("Curiosity Gap", f"{hook_window_result.get('curiosity_gap_score', 0)}/100")
+                        hc2.metric("Promise Clarity", f"{hook_window_result.get('promise_clarity_score', 0)}/100")
+                        hc3.metric("Pattern Interrupt", f"{hook_window_result.get('pattern_interrupt_score', 0)}/100")
+                        hc4.metric("Title Match", f"{hook_window_result.get('title_match_score', 0)}/100")
+                        st.metric("Overall Hook-Window Score", f"{hook_window_result.get('overall_hook_window_score', 0)}/100")
+                        st.error(f"**Biggest bounce risk:** {hook_window_result.get('biggest_risk', 'N/A')}")
+                        st.success(f"**Rewritten hook:** {hook_window_result.get('rewritten_hook', 'N/A')}")
+                else:
+                    st.info("No hook-window text found. Provide a YouTube URL with captions, or paste your first-15-seconds script above.")
+
+            # === HOOK & PACING ANALYSIS (video upload) ===
+            cpm = None
+            if video_path and os.path.exists(video_path):
+                st.subheader("🎬 Visual Pacing & Boring-Signal Analysis")
+                with st.spinner("Analyzing pacing..."): vid_metrics = analyze_hook_video(video_path)
+                if "error" not in vid_metrics:
+                    cpm = vid_metrics["cpm"]; st.metric("Visual Pacing", f"{cpm} Cuts/Min")
+                    if is_short:
+                        if cpm < 20: st.error("⚠️ BORING FOR SHORTS! Need 30+ CPM.")
+                        elif cpm < 40: st.warning("️ Good, but aim for 40+ CPM for Shorts.")
+                        else: st.success("✅ VIRAL PACING! Excellent for Shorts.")
+                    else:
+                        if cpm < 10: st.success("✅ Good for Technical Content")
+                        elif cpm < 20: st.success("✅ Excellent Pacing")
+                        else: st.warning("️ Very Fast")
+
+                with st.spinner("Detecting boring signals..."): boring_metrics = detect_boring_signals(video_path)
+                if "error" not in boring_metrics:
+                    st.metric("Boring Score", f"{boring_metrics['boring_score']}/100", delta="Lower is better")
+                    if boring_metrics['is_boring']: st.error(" BORING - Add visual variety!")
+                    else: st.success("✅ ENGAGING - Good visual dynamics.")
+
+                if title_input:
+                    st.markdown("#### 🎨 AI Thumbnail Brief & Prompt")
+                    with st.spinner("Generating brief..."): thumb_brief = generate_thumbnail_brief(title_input, final_transcript, topic_input)
+                    if "error" not in thumb_brief:
+                        st.metric("Predicted CTR Score", f"{thumb_brief.get('thumbnail_score_prediction', 0)}/100")
+                        col_b1, col_b2 = st.columns(2)
+                        with col_b1:
+                            st.markdown(f"**Text:** {thumb_brief.get('thumbnail_text')}")
+                            st.markdown(f"**Colors:** {thumb_brief.get('color_scheme')}")
+                            st.markdown(f"**Layout:** {thumb_brief.get('layout')}")
+                        with col_b2:
+                            st.markdown("**Midjourney Prompt:**")
+                            st.code(thumb_brief.get('midjourney_prompt', ''), language="text")
+
+                if problem_input or mechanism_input or payoff_input:
+                    st.markdown("#### 🧠 AI Hook Builder")
+                    with st.spinner("Weaving your ingredients..."): llm_data = analyze_script_with_llm(problem_input, mechanism_input, payoff_input, cpm or 10, is_short)
+                    if "error" not in llm_data:
+                        s1, s2, s3 = st.columns(3)
+                        s1.metric("Pattern Interrupt", f"{llm_data.get('pattern_interrupt_score', 0)}/10")
+                        s2.metric("Value Prop", f"{llm_data.get('value_prop_score', 0)}/10")
+                        s3.metric("Jargon Control", f"{llm_data.get('jargon_score', 0)}/10")
+                        st.success(llm_data.get('script_rewrite', 'N/A'))
+
+            # === STAGE 3: SUBSCRIBE — NEW FUNNEL ADVISOR ===
+            st.markdown("---"); st.header("3️⃣ SUBSCRIBE — Conversion Advisor (NEW)")
+            st.caption("Your only real conversion goal on YouTube. This checks if/when/how you ask, and generates CTAs that fit a skeptical quant/finance audience.")
+            if final_transcript and final_transcript != "No transcript available.":
+                with st.spinner("Analyzing subscribe-conversion mechanics..."):
+                    sub_result = analyze_subscribe_funnel(final_transcript, title_input, topic_input, mode_name)
+                if "error" in sub_result:
+                    st.warning(sub_result["error"])
+                else:
+                    sc1, sc2, sc3 = st.columns(3)
+                    sc1.metric("CTA Detected", "Yes" if sub_result.get("cta_detected") else "No")
+                    sc2.metric("CTA Timing", sub_result.get("cta_timing", "none").title())
+                    sc3.metric("Value-Before-Ask", f"{sub_result.get('value_before_ask_score', 0)}/100")
+                    st.markdown(f"**CTA Style:** {sub_result.get('cta_style', 'none').replace('_', ' ').title()}")
+                    st.warning(f"**Diagnosis:** {sub_result.get('diagnosis', 'N/A')}")
+                    st.markdown("**Suggested soft-ask (mid-video, right after a value payoff):**")
+                    st.info(sub_result.get("soft_ask_line", "N/A"))
+                    st.markdown("**Suggested hard-ask (outro):**")
+                    st.success(sub_result.get("hard_ask_line", "N/A"))
+            else:
+                st.info("Provide a YouTube URL with captions to run the subscribe-funnel analysis (needs the full transcript).")
 
         for f in [thumb_path, video_path, new_thumb_path]:
             if f and os.path.exists(f):
