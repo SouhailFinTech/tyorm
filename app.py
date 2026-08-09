@@ -47,6 +47,15 @@ CHANNEL_TITLE_RULES = """This channel has DATA-BACKED rules from its own real pe
 2. NEVER use a question mark. On this channel, titles with "?" measurably underperform 3x (0.77% vs 2.23% real CTR). If a draft is phrased as a question, rewrite it as a statement.
 3. Thumbnails must visualize the SPECIFIC RESULT/NUMBER (e.g. a before/after comparison like "22% vs 79%"), not a generic process screenshot (plain chart or code with no result shown)."""
 
+# Shorts follow a DIFFERENT winning pattern than long-form on this channel — Search
+# is the dominant discovery lever for Shorts (not Browse, which is what drives
+# long-form), so the title's job is to mirror a real, commonly-searched, tutorial/
+# action-intent phrase — not tell a personal-outcome story like long-form titles do.
+SHORTS_TITLE_RULES = """This channel has DATA-BACKED rules from its own real Shorts performance — apply as HARD constraints:
+1. FORMAT (required): title must be either a TUTORIAL promise ("How I [did X] in [short timeframe]") or a LISTICLE ("[N] reasons/ways [claim]") — both won on this channel. Abstract finance concepts, clichés ("the only free lunch"), or dry analytical framing ("X reality check") measurably flopped (near-zero views) even when technically accurate.
+2. The core phrase must mirror something people ACTUALLY search for on YouTube (e.g. "algo trading bot", "trading bot python", "auto trading bot") — not a niche/jargon term with low real search volume, even if it's topically correct. A title can rank 80%+ of its (tiny) traffic from Search and still flop if the underlying query itself has almost no volume — the phrase has to be one real people commonly type, not just a technically-relevant one.
+3. NEVER use a question mark (same rule as long-form, still holds for Shorts)."""
+
 
 # ---------------------------------------------------------------------------
 # PHASE 1: Calibration & History — closes the loop between predicted scores
@@ -555,9 +564,9 @@ def analyze_title_with_llm(title, transcript, topic, is_short=False):
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     if is_short:
-        prompt = f"""{CHANNEL_TITLE_RULES}
+        prompt = f"""{SHORTS_TITLE_RULES}
 
-You are a YouTube Shorts SEO expert. Current Title: "{title}". Topic: {topic}. RULES: 1. Must be under 50 chars. 2. Follow the channel formula above strictly. 3. No "How to". Output STRICT JSON: "title_score" (int, penalize heavily if the formula/question-mark rules above are violated), "character_count" (int), "is_optimal_length" (bool), "alternative_titles" (array of 3 strings, ALL must follow the formula above), "recommended_keywords" (array of 5 strings)"""
+You are a YouTube Shorts SEO expert. Current Title: "{title}". Topic: {topic}. Additional constraint: must be under 50 chars. Follow the Shorts rules above strictly when scoring and generating alternatives. Output STRICT JSON: "title_score" (int, penalize heavily if the format/search-phrase/question-mark rules above are violated), "character_count" (int), "is_optimal_length" (bool), "alternative_titles" (array of 3 strings, ALL must follow the Shorts rules above), "recommended_keywords" (array of 5 strings)"""
     else:
         prompt = f"""{CHANNEL_TITLE_RULES}
 
@@ -852,7 +861,7 @@ Output STRICT JSON: "first_150_chars_ok" (bool), "first_150_chars_issue" (string
 # your video before it exists. This is also where Browse-optimization (the channel
 # formula) and Search-optimization (real query phrases) get reconciled into one
 # title instead of treating them as separate, conflicting jobs. ===
-def generate_title_thumb_from_script(script_text, topic, niche_mode="Technical", is_faceless=False, search_keywords=None):
+def generate_title_thumb_from_script(script_text, topic, niche_mode="Technical", is_faceless=False, search_keywords=None, is_short=False):
     api_key = st.secrets.get("GROQ_API_KEY")
     if not api_key: return {"error": "No Groq API Key found."}
     if not script_text or not script_text.strip():
@@ -863,15 +872,15 @@ def generate_title_thumb_from_script(script_text, topic, niche_mode="Technical",
         "and color-blocking, never a presenter face."
         if is_faceless else "A presenter face can be used if it helps."
     )
+    rules_block = SHORTS_TITLE_RULES if is_short else CHANNEL_TITLE_RULES
     kw_note = (
         f"Real search phrases your audience actually types (from channel discovery data): {search_keywords}. "
-        "Where possible without breaking the formula rule, try to make ONE candidate title naturally contain "
-        "one of these phrases — this is how a Browse-optimized title also earns Search traffic instead of "
-        "the two working against each other."
+        "Where possible without breaking the format rules, try to make ONE candidate title naturally contain "
+        "one of these phrases."
         if search_keywords else
         "No pre-researched search phrases were provided for this run."
     )
-    prompt = f"""{CHANNEL_TITLE_RULES}
+    prompt = f"""{rules_block}
 
 You are a YouTube title/thumbnail strategist for a {niche_mode} channel. This video has NOT been uploaded yet — here is its full script/outline, which is your only source of truth about what's actually in it:
 "{script_text[:3000]}"
@@ -879,9 +888,9 @@ Topic: {topic}
 {kw_note}
 {face_instruction}
 
-TASK: Generate 3 title candidates, ALL strictly following the formula and question-mark rules above — pull the specific number/outcome from the actual script content, don't invent one. For each, note whether it naturally contains one of the given search phrases. Then write a thumbnail brief for the strongest candidate that visualizes its specific number/result.
+TASK: Generate 3 title candidates, ALL strictly following the rules above — pull the specific number/outcome/phrase from the actual script content, don't invent one. For each, note whether it naturally contains one of the given search phrases. Then write a thumbnail brief for the strongest candidate.
 
-Output STRICT JSON: "titles" (array of 3 objects, each with "title" (string), "contains_search_phrase" (bool), "matched_phrase" (string or null)), "thumbnail_text" (string, max 5 words, should include the specific number), "layout" (string), "midjourney_prompt" (string, detailed, must depict a before/after or comparison visual of the actual number from the script), "why_this_works" (string, 1-2 sentences tying it to this channel's own real performance pattern)"""
+Output STRICT JSON: "titles" (array of 3 objects, each with "title" (string), "contains_search_phrase" (bool), "matched_phrase" (string or null)), "thumbnail_text" (string, max 5 words), "layout" (string), "midjourney_prompt" (string, detailed), "why_this_works" (string, 1-2 sentences tying it to this channel's own real performance pattern)"""
     try:
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.6, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
@@ -1049,7 +1058,7 @@ else:
             st.warning("Paste your script in the Full Script Compressor box above first — that's what this reads from.")
         else:
             with st.spinner("Generating from your script..."):
-                pre_upload_result = generate_title_thumb_from_script(full_script_input, topic_input, niche_mode.split(" ")[0], is_faceless)
+                pre_upload_result = generate_title_thumb_from_script(full_script_input, topic_input, niche_mode.split(" ")[0], is_faceless, is_short=is_short)
             if "error" in pre_upload_result:
                 st.warning(pre_upload_result["error"])
             else:
