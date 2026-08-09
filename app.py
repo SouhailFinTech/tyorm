@@ -11,6 +11,7 @@ from groq import Groq
 from youtube_transcript_api import YouTubeTranscriptApi
 import re
 import urllib.request
+import zipfile
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="QuantTube Analyzer Pro", page_icon="📈", layout="wide")
@@ -92,15 +93,16 @@ def log_prediction_row(video_title, format_label, thumb_score=None, title_score=
     return df
 
 def parse_youtube_studio_csv(uploaded_file):
-    """Flexible parser for YouTube Studio's per-video CSV export. Column names vary
-    by export type and account locale, so this matches on substrings rather than
-    exact names instead of breaking on the first non-US-English export."""
-    try:
-        df = pd.read_csv(uploaded_file)
-    except Exception as e:
-        return None, f"Could not read CSV: {e}"
+    """Flexible parser for YouTube Studio's export. Accepts EITHER a single per-video
+    CSV, OR the full .zip bundle Studio actually exports — which contains three files
+    (a per-video table, a daily chart-data file, and a channel totals file). Only the
+    table file has per-video title + CTR + impressions; this picks that one out
+    automatically instead of requiring the user to unzip and find it themselves.
+    Also matches French-locale column headers (e.g. "Titre de la vidéo", "Taux de
+    clics par impression (%)"), since Studio exports in the account's UI language."""
+    filename = getattr(uploaded_file, "name", "") or ""
 
-    def find_col(possible_substrings):
+    def find_col(df, possible_substrings):
         for col in df.columns:
             col_lower = str(col).lower()
             for sub in possible_substrings:
@@ -108,21 +110,58 @@ def parse_youtube_studio_csv(uploaded_file):
                     return col
         return None
 
-    title_col = find_col(["video title", "content", "title"])
-    ctr_col = find_col(["click-through rate", "click through rate", "ctr"])
-    avd_col = find_col(["average percentage viewed", "average % viewed", "avg % viewed", "average view percentage"])
-    impressions_col = find_col(["impressions"])
-    views_col = find_col(["views"])
-    subs_col = find_col(["subscribers"])
+    candidate_dfs = []
+    if filename.lower().endswith(".zip"):
+        try:
+            zf = zipfile.ZipFile(uploaded_file)
+        except Exception as e:
+            return None, f"Could not read zip file: {e}"
+        for name in zf.namelist():
+            if name.lower().endswith(".csv"):
+                try:
+                    with zf.open(name) as f:
+                        df = pd.read_csv(f)
+                    candidate_dfs.append((name, df))
+                except Exception:
+                    continue
+        if not candidate_dfs:
+            return None, "No CSV files found inside that zip."
+    else:
+        try:
+            df = pd.read_csv(uploaded_file)
+        except Exception as e:
+            return None, f"Could not read CSV: {e}"
+        candidate_dfs.append((filename or "uploaded.csv", df))
 
-    if not title_col:
-        return None, "Could not find a video title column in this CSV — make sure it's a per-video export from YouTube Studio (Analytics > Content > Advanced mode > Export)."
+    # Among the candidate CSVs (1 if a plain CSV was uploaded, 3 if it was the zip),
+    # pick the one that actually has a per-video title column AND a CTR or
+    # impressions column — the chart-data and totals files lack one or both of these,
+    # so this reliably isolates the right file without asking the user to know which
+    # one it is.
+    title_col = ctr_col = impressions_col = df_to_use = None
+    for name, cand_df in candidate_dfs:
+        # Note: "Content"/"Contenu" is the video-ID column in real Studio exports, NOT
+        # the title — deliberately excluded here so it can't shadow the real title
+        # column ("Video title" / "Titre de la vidéo").
+        t = find_col(cand_df, ["video title", "titre de la vidéo", "titre de la video", "titre"])
+        c = find_col(cand_df, ["click-through rate", "click through rate", "ctr", "taux de clics"])
+        i = find_col(cand_df, ["impressions"])
+        if t and (c or i):
+            title_col, ctr_col, impressions_col, df_to_use = t, c, i, cand_df
+            break
+
+    if df_to_use is None:
+        return None, "Couldn't find a per-video table with a title + CTR/impressions column. If you uploaded the Studio zip, make sure it's the unmodified export; if a single CSV, make sure it's the 'Table data' file, not the chart-data or totals file."
+
+    avd_col = find_col(df_to_use, ["average percentage viewed", "average % viewed", "avg % viewed", "average view percentage", "pourcentage moyen visionné", "pourcentage moyen vu"])
+    views_col = find_col(df_to_use, ["views", "vues"])
+    subs_col = find_col(df_to_use, ["subscribers", "abonnés", "abonnes"])
 
     parsed_rows = []
-    for _, row in df.iterrows():
+    for _, row in df_to_use.iterrows():
         title_val = row.get(title_col)
         if pd.isna(title_val) or not str(title_val).strip():
-            continue
+            continue  # skips the "Total" aggregate row, which has an empty title
         parsed_rows.append({
             "video_title": str(title_val).strip(),
             "actual_ctr_pct": row.get(ctr_col) if ctr_col else None,
@@ -735,7 +774,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📊 Calibration & History (NEW)")
     st.caption("Upload your real YouTube Studio CSV export to check whether this tool's scores actually predict real performance.")
-    studio_csv = st.file_uploader("Upload Studio CSV export", type=["csv"], key="studio_csv_upload")
+    studio_csv = st.file_uploader("Upload Studio export (.zip or .csv)", type=["csv", "zip"], key="studio_csv_upload")
     if studio_csv is not None:
         if st.button("Import CSV", key="import_csv_btn", use_container_width=True):
             parsed, err = parse_youtube_studio_csv(studio_csv)
