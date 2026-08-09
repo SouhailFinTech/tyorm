@@ -369,6 +369,42 @@ def get_hook_window_text(timed_transcript, window_seconds=15):
             break
     return " ".join(words).strip()
 
+# === NEW: Spoken-Keyword Search Checker ===
+# YouTube indexes SPOKEN words via captions/transcript for search ranking, not just
+# title/description/tags. A video can have a perfect title and still under-rank for
+# search if the target keyword is never actually said. This is deterministic —
+# real string matching against the real transcript, not an LLM guess.
+def check_keywords_spoken(timed_transcript, keywords, early_window_seconds=60):
+    if not timed_transcript or not keywords:
+        return None
+    full_text = " ".join(seg.get("text", "") for seg in timed_transcript).lower()
+    early_text = " ".join(
+        seg.get("text", "") for seg in timed_transcript if seg.get("start", 0) <= early_window_seconds
+    ).lower()
+
+    results = []
+    for kw in keywords:
+        kw_clean = str(kw).strip().lower()
+        if not kw_clean:
+            continue
+        said_at_all = kw_clean in full_text
+        said_early = kw_clean in early_text
+        first_timestamp = None
+        if said_at_all:
+            running = ""
+            for seg in timed_transcript:
+                running += " " + seg.get("text", "").lower()
+                if kw_clean in running:
+                    first_timestamp = seg.get("start", 0)
+                    break
+        results.append({
+            "keyword": kw,
+            "said_at_all": said_at_all,
+            "said_early": said_early,
+            "first_timestamp": first_timestamp,
+        })
+    return results
+
 # === NEW: Shorts vertical-format check ===
 # A Short uploaded in landscape gets letterboxed/cropped badly by the Shorts player,
 # which tanks completion rate immediately — checking this takes one line and catches
@@ -1298,6 +1334,20 @@ if run_analysis or seo_only:
                     with col_i4:
                         st.markdown("**⏱️ Session-time / rewatch tactic:**")
                         st.write(imp_result.get("session_time_tactic", "N/A"))
+
+                    # NEW: Spoken-Keyword Search Checker — deterministic, real transcript check
+                    if timed_transcript and imp_result.get("search_keywords"):
+                        st.markdown("#### 🎙️ Are your target keywords actually SPOKEN? (NEW)")
+                        st.caption("YouTube indexes your spoken words via captions for search ranking — a keyword in your title alone isn't enough. This checks your real transcript, not a guess.")
+                        spoken_check = check_keywords_spoken(timed_transcript, imp_result.get("search_keywords", []))
+                        if spoken_check:
+                            for res in spoken_check:
+                                if res["said_early"]:
+                                    st.success(f"✅ \"{res['keyword']}\" — said at {res['first_timestamp']:.0f}s (within the first minute — good for indexing)")
+                                elif res["said_at_all"]:
+                                    st.warning(f"⚠️ \"{res['keyword']}\" — said at {res['first_timestamp']:.0f}s, but not until later. Saying it earlier strengthens search relevance.")
+                                else:
+                                    st.error(f"❌ \"{res['keyword']}\" — never said in the video. If this is a keyword you want to rank for, work it into the script naturally.")
             else:
                 st.info("Enter a title and topic/keyword above to generate the discovery plan.")
 
