@@ -37,6 +37,18 @@ def load_face_cascade():
 face_cascade = load_face_cascade()
 
 # ---------------------------------------------------------------------------
+# CHANNEL-SPECIFIC RULES — derived from this channel's own real Studio data,
+# not generic copywriting advice. These get injected as HARD constraints into
+# every title/thumbnail prompt below, so the AI can't quietly ignore them.
+# Update this if/when new patterns get confirmed from real performance data.
+# ---------------------------------------------------------------------------
+CHANNEL_TITLE_RULES = """This channel has DATA-BACKED rules from its own real performance history. Apply these as HARD constraints, not stylistic suggestions — a title that violates rule 1 or 2 is a failed output, not a valid alternative:
+1. FORMULA (required): every title must follow [Personal action] + [specific number] + [concrete outcome]. Shape: "I [did X] and got [specific number/%] in [timeframe]." A title with no specific number tied to a personal outcome is not acceptable, even if it's catchy.
+2. NEVER use a question mark. On this channel, titles with "?" measurably underperform 3x (0.77% vs 2.23% real CTR). If a draft is phrased as a question, rewrite it as a statement.
+3. Thumbnails must visualize the SPECIFIC RESULT/NUMBER (e.g. a before/after comparison like "22% vs 79%"), not a generic process screenshot (plain chart or code with no result shown)."""
+
+
+# ---------------------------------------------------------------------------
 # PHASE 1: Calibration & History — closes the loop between predicted scores
 # and what actually happened on YouTube. Without this, every score in this
 # app is an untested guess. With it, you can see whether thumbnail_score
@@ -231,6 +243,74 @@ def compute_calibration(df):
         else:
             results[label] = {"correlation": None, "n": len(sub)}
     return results
+
+# ---------------------------------------------------------------------------
+# PHASE 2 (channel-audit half): works directly on real imported Studio data —
+# no predictions, no backfilling, no waiting. Ranks your actual videos and
+# checks whether simple title patterns correlate with real CTR on YOUR
+# channel specifically, using the data you already have.
+# ---------------------------------------------------------------------------
+def extract_title_features(title):
+    """Deterministic, no LLM — cheap enough to run on every row."""
+    title = title or ""
+    return {
+        "length": len(title),
+        "word_count": len(title.split()),
+        "has_number": bool(re.search(r"\d", title)),
+        "has_question": "?" in title,
+        "hashtag_count": title.count("#"),
+        "has_colon": ":" in title,
+    }
+
+def compute_channel_audit(df):
+    """Ranks real videos by CTR and checks whether simple title features
+    correlate with real CTR/views on this specific channel. Only uses rows
+    with real actual_ctr_pct data — works even with zero logged predictions."""
+    working = df.copy()
+    working["actual_ctr_pct"] = pd.to_numeric(working.get("actual_ctr_pct"), errors="coerce")
+    working["actual_views"] = pd.to_numeric(working.get("actual_views"), errors="coerce")
+    working = working.dropna(subset=["actual_ctr_pct"])
+    working = working[working["video_title"].astype(str).str.strip() != ""]
+    working = working[working["video_title"].astype(str).str.lower() != "total"]
+
+    if working.empty:
+        return None
+
+    ranked = working.sort_values("actual_ctr_pct", ascending=False).reset_index(drop=True)
+
+    feat_rows = []
+    for _, row in working.iterrows():
+        feats = extract_title_features(str(row["video_title"]))
+        feats["actual_ctr_pct"] = row["actual_ctr_pct"]
+        feat_rows.append(feats)
+    feat_df = pd.DataFrame(feat_rows)
+
+    feature_insights = {}
+    n = len(feat_df)
+    if n >= 5:
+        for feat_col in ["length", "word_count", "hashtag_count"]:
+            sub = feat_df[[feat_col, "actual_ctr_pct"]].dropna()
+            if len(sub) >= 5 and sub[feat_col].std() > 0:
+                corr = np.corrcoef(sub[feat_col].astype(float), sub["actual_ctr_pct"].astype(float))[0, 1]
+                feature_insights[feat_col] = round(float(corr), 2)
+        for bool_col in ["has_number", "has_question", "has_colon"]:
+            with_feat = feat_df[feat_df[bool_col] == True]["actual_ctr_pct"]
+            without_feat = feat_df[feat_df[bool_col] == False]["actual_ctr_pct"]
+            if len(with_feat) >= 2 and len(without_feat) >= 2:
+                feature_insights[bool_col] = {
+                    "avg_ctr_with": round(float(with_feat.mean()), 2),
+                    "avg_ctr_without": round(float(without_feat.mean()), 2),
+                    "n_with": len(with_feat),
+                    "n_without": len(without_feat),
+                }
+
+    return {
+        "ranked": ranked,
+        "feature_insights": feature_insights,
+        "n_videos": n,
+        "avg_ctr": round(float(working["actual_ctr_pct"].mean()), 2),
+        "median_ctr": round(float(working["actual_ctr_pct"].median()), 2),
+    }
 
 # --- HELPER FUNCTIONS ---
 def extract_video_id(url):
@@ -462,7 +542,9 @@ def generate_thumbnail_brief(title, transcript, topic, is_faceless=False):
         if is_faceless else
         "A presenter face can be used if it strengthens the thumbnail."
     )
-    prompt = f"""You are a YouTube thumbnail designer expert for technical/finance channels. Title: "{title}". Topic: {topic}. Transcript Snippet: "{transcript[:300]}". {face_instruction} Output STRICT JSON: "thumbnail_text" (string, max 5 words), "color_scheme" (object with background, text, accent hex codes), "layout" (string description), "visual_elements" (array of strings), "midjourney_prompt" (string, detailed), "style" (string), "dos" (array of 3 strings), "donts" (array of 3 strings), "thumbnail_score_prediction" (int 0-100)"""
+    prompt = f"""{CHANNEL_TITLE_RULES}
+
+You are a YouTube thumbnail designer expert for technical/finance channels. Title: "{title}". Topic: {topic}. Transcript Snippet: "{transcript[:300]}". {face_instruction} Follow rule 3 above strictly — the thumbnail concept must visualize the specific number/result from the title. Output STRICT JSON: "thumbnail_text" (string, max 5 words, should include the specific number if the title has one), "color_scheme" (object with background, text, accent hex codes), "layout" (string description), "visual_elements" (array of strings), "midjourney_prompt" (string, detailed), "style" (string), "dos" (array of 3 strings), "donts" (array of 3 strings), "thumbnail_score_prediction" (int 0-100)"""
     try:
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.7, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
@@ -473,9 +555,13 @@ def analyze_title_with_llm(title, transcript, topic, is_short=False):
     if not api_key: return {"error": "No Groq API Key found."}
     client = Groq(api_key=api_key)
     if is_short:
-        prompt = f"""You are a YouTube Shorts SEO expert. Current Title: "{title}". Topic: {topic}. RULES: 1. Must be under 50 chars. 2. High curiosity, NO clickbait. 3. No "How to". Output STRICT JSON: "title_score" (int), "character_count" (int), "is_optimal_length" (bool), "alternative_titles" (array of 3 strings), "recommended_keywords" (array of 5 strings)"""
+        prompt = f"""{CHANNEL_TITLE_RULES}
+
+You are a YouTube Shorts SEO expert. Current Title: "{title}". Topic: {topic}. RULES: 1. Must be under 50 chars. 2. Follow the channel formula above strictly. 3. No "How to". Output STRICT JSON: "title_score" (int, penalize heavily if the formula/question-mark rules above are violated), "character_count" (int), "is_optimal_length" (bool), "alternative_titles" (array of 3 strings, ALL must follow the formula above), "recommended_keywords" (array of 5 strings)"""
     else:
-        prompt = f"""You are a YouTube SEO expert for technical/finance content. Current Title: "{title}". Topic: {topic}. Transcript Snippet: "{transcript[:300]}". Output STRICT JSON: "title_score" (int), "character_count" (int), "is_optimal_length" (bool), "alternative_titles" (array of 3 strings), "recommended_keywords" (array of 5 strings), "emotional_triggers" (string), "improvement_notes" (string)"""
+        prompt = f"""{CHANNEL_TITLE_RULES}
+
+You are a YouTube SEO expert for technical/finance content. Current Title: "{title}". Topic: {topic}. Transcript Snippet: "{transcript[:300]}". Follow the channel rules above strictly when scoring and generating alternatives. Output STRICT JSON: "title_score" (int, penalize heavily if the formula/question-mark rules above are violated), "character_count" (int), "is_optimal_length" (bool), "alternative_titles" (array of 3 strings, ALL must follow the formula above), "recommended_keywords" (array of 5 strings), "emotional_triggers" (string), "improvement_notes" (string)"""
     try:
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.5, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
@@ -761,9 +847,84 @@ Output STRICT JSON: "first_150_chars_ok" (bool), "first_150_chars_issue" (string
         return json.loads(completion.choices[0].message.content)
     except Exception as e: return {"error": str(e)}
 
+# === NEW: Pre-Upload Title & Thumbnail Generator — works from the raw SCRIPT of a
+# video that hasn't been published (or even filmed) yet, since the AI can't "watch"
+# your video before it exists. This is also where Browse-optimization (the channel
+# formula) and Search-optimization (real query phrases) get reconciled into one
+# title instead of treating them as separate, conflicting jobs. ===
+def generate_title_thumb_from_script(script_text, topic, niche_mode="Technical", is_faceless=False, search_keywords=None):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    if not script_text or not script_text.strip():
+        return {"error": "No script provided — paste your video's script/outline above."}
+    client = Groq(api_key=api_key)
+    face_instruction = (
+        "This is a FACELESS channel — design around bold typography, data visualizations, "
+        "and color-blocking, never a presenter face."
+        if is_faceless else "A presenter face can be used if it helps."
+    )
+    kw_note = (
+        f"Real search phrases your audience actually types (from channel discovery data): {search_keywords}. "
+        "Where possible without breaking the formula rule, try to make ONE candidate title naturally contain "
+        "one of these phrases — this is how a Browse-optimized title also earns Search traffic instead of "
+        "the two working against each other."
+        if search_keywords else
+        "No pre-researched search phrases were provided for this run."
+    )
+    prompt = f"""{CHANNEL_TITLE_RULES}
+
+You are a YouTube title/thumbnail strategist for a {niche_mode} channel. This video has NOT been uploaded yet — here is its full script/outline, which is your only source of truth about what's actually in it:
+"{script_text[:3000]}"
+Topic: {topic}
+{kw_note}
+{face_instruction}
+
+TASK: Generate 3 title candidates, ALL strictly following the formula and question-mark rules above — pull the specific number/outcome from the actual script content, don't invent one. For each, note whether it naturally contains one of the given search phrases. Then write a thumbnail brief for the strongest candidate that visualizes its specific number/result.
+
+Output STRICT JSON: "titles" (array of 3 objects, each with "title" (string), "contains_search_phrase" (bool), "matched_phrase" (string or null)), "thumbnail_text" (string, max 5 words, should include the specific number), "layout" (string), "midjourney_prompt" (string, detailed, must depict a before/after or comparison visual of the actual number from the script), "why_this_works" (string, 1-2 sentences tying it to this channel's own real performance pattern)"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.6, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e: return {"error": str(e)}
+
 # --- UI ---
 st.title("📈 QuantTube Analyzer Pro")
 st.markdown("Proprietary CV & NLP pipeline for Algo-Trading YouTube optimization — **Click → Watch → Subscribe funnel.**")
+
+# === PHASE 2 (channel-audit half): shows immediately if real Studio data has been
+# imported, using zero predictions — works on real CTR data alone. ===
+_audit_history = load_history()
+_audit_result = compute_channel_audit(_audit_history) if not _audit_history.empty else None
+if _audit_result:
+    with st.expander(f"📈 Channel Audit — {_audit_result['n_videos']} real videos analyzed (NEW, Phase 2)", expanded=False):
+        st.caption("Runs directly on your imported Studio data — no predictions needed. Ranks your actual videos and checks whether simple title patterns correlate with real CTR on this specific channel.")
+        ac1, ac2 = st.columns(2)
+        ac1.metric("Channel avg CTR", f"{_audit_result['avg_ctr']}%")
+        ac2.metric("Channel median CTR", f"{_audit_result['median_ctr']}%")
+
+        ranked = _audit_result["ranked"]
+        st.markdown("**🏆 Top 5 by real CTR:**")
+        top5 = ranked.head(5)[["video_title", "actual_ctr_pct", "actual_views", "actual_impressions"]]
+        st.dataframe(top5, use_container_width=True, hide_index=True)
+        st.markdown("**🔻 Bottom 5 by real CTR (audit targets):**")
+        bottom5 = ranked.tail(5)[["video_title", "actual_ctr_pct", "actual_views", "actual_impressions"]]
+        st.dataframe(bottom5, use_container_width=True, hide_index=True)
+
+        insights = _audit_result["feature_insights"]
+        if insights:
+            st.markdown("**📊 Title patterns vs real CTR on your channel:**")
+            for key, val in insights.items():
+                if isinstance(val, dict):
+                    diff = val["avg_ctr_with"] - val["avg_ctr_without"]
+                    direction = "higher" if diff > 0 else "lower"
+                    label_map = {"has_number": "Has a number", "has_question": "Has a '?'", "has_colon": "Has a ':'"}
+                    st.write(f"- **{label_map.get(key, key)}:** {val['avg_ctr_with']}% avg CTR (n={val['n_with']}) vs {val['avg_ctr_without']}% without (n={val['n_without']}) — {abs(round(diff,2))}pp {direction}")
+                else:
+                    label_map = {"length": "Title length (chars)", "word_count": "Word count", "hashtag_count": "Hashtag count"}
+                    st.write(f"- **{label_map.get(key, key)} vs CTR:** r = {val}")
+            st.caption("These are correlations on your own past videos, not causal proof — but with 50+ real data points, they're a far better guide than guessing.")
+        else:
+            st.info("Not enough videos with real CTR data yet for pattern detection (need 5+).")
 
 with st.sidebar:
     st.header("️ Settings")
@@ -879,6 +1040,28 @@ else:
 
     st.subheader("✂️ Full Script Compressor")
     full_script_input = st.text_area("Paste your full script here...", height=200)
+
+    # === NEW: Pre-Upload Title & Thumbnail Generator ===
+    st.subheader("🎯 Title & Thumbnail Generator — From Script (NEW)")
+    st.caption("For a video that isn't uploaded yet. Since the AI can't watch it, this uses the script you paste above as its only source of truth, and strictly applies this channel's own data-backed title formula instead of generic suggestions.")
+    if st.button("🎯 Generate Data-Backed Title & Thumbnail", use_container_width=True):
+        if not full_script_input.strip():
+            st.warning("Paste your script in the Full Script Compressor box above first — that's what this reads from.")
+        else:
+            with st.spinner("Generating from your script..."):
+                pre_upload_result = generate_title_thumb_from_script(full_script_input, topic_input, niche_mode.split(" ")[0], is_faceless)
+            if "error" in pre_upload_result:
+                st.warning(pre_upload_result["error"])
+            else:
+                st.markdown("**📝 Title candidates (formula-compliant):**")
+                for i, t in enumerate(pre_upload_result.get("titles", []), 1):
+                    tag = "🔎 contains a real search phrase" if t.get("contains_search_phrase") else "📡 Browse/CTR-optimized only"
+                    st.info(f"**{i}.** {t.get('title', 'N/A')}  \n_{tag}" + (f" ({t.get('matched_phrase')})_" if t.get("matched_phrase") else "_"))
+                st.markdown("**🎨 Thumbnail brief for the strongest candidate:**")
+                st.markdown(f"**Text overlay:** {pre_upload_result.get('thumbnail_text', 'N/A')}")
+                st.markdown(f"**Layout:** {pre_upload_result.get('layout', 'N/A')}")
+                st.code(pre_upload_result.get("midjourney_prompt", ""), language="text")
+                st.success(f"**Why this fits your channel:** {pre_upload_result.get('why_this_works', 'N/A')}")
 
 col_btn1, col_btn2 = st.columns([3, 1])
 with col_btn1: run_analysis = st.button("🚀 Full Analysis", type="primary", use_container_width=True)
