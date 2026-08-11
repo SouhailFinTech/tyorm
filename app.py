@@ -709,6 +709,19 @@ def validate_threads_post_length(text, limit=500):
 # === NEW: Facebook Reel Caption — deterministic validation + generation, separate
 # tag from X/Threads since this page's real data shows a different winning pattern
 # (short, link-free, funnel-free, stat-led) than either of those platforms. ===
+def check_hashtags_for_subscribe_push(hashtags):
+    """Catches the same off-platform-push pattern the funnel-CTA check catches in
+    caption body text, but in the hashtag list — a #SubscribeNow hashtag is the same
+    energy that measurably cost this page reach, just relocated."""
+    if not hashtags:
+        return []
+    flagged = []
+    for h in hashtags:
+        h_clean = str(h).lstrip("#").lower()
+        if re.search(r"subscribe|followme|follow.?now|joinnow", h_clean):
+            flagged.append(h)
+    return flagged
+
 def validate_facebook_caption(caption, length_limit=150):
     caption = caption or ""
     return {
@@ -727,9 +740,9 @@ def generate_facebook_caption(topic, transcript):
 
 You are writing a Facebook Reel caption for a quant/algo-trading page. Topic: {topic}. Source content: "{transcript[:1200] if transcript else 'Topic: ' + topic}".
 
-TASK: Write ONE caption strictly following the rules above. If a link would normally be relevant, do NOT put it in the caption — instead note it should go in the first comment.
+TASK: Write ONE caption strictly following the rules above. If a link would normally be relevant, do NOT put it in the caption — instead note it should go in the first comment. Hashtags must be topical/content-related only (e.g. #AlgoTrading, #QuantFinance) — NEVER a subscribe/follow-push hashtag like #SubscribeNow or #FollowMe. That's the same off-platform-push pattern that cost this page real reach, just moved into a hashtag instead of the caption body.
 
-Output STRICT JSON: "caption" (string, under 150 chars), "hashtags" (array of 5 strings), "link_placement_note" (string, e.g. "Put your video/product link in the first comment, not here")"""
+Output STRICT JSON: "caption" (string, under 150 chars), "hashtags" (array of 5 strings, topical only, no subscribe/follow-push hashtags), "link_placement_note" (string, e.g. "Put your video/product link in the first comment, not here")"""
     try:
         completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.5, response_format={"type": "json_object"})
         return json.loads(completion.choices[0].message.content)
@@ -1293,8 +1306,12 @@ if run_analysis or seo_only:
                         st.error("🔗 Contains a link — this measurably cost 29% reach on this page's real data. Move it to the first comment.")
                     if check["has_funnel_cta"]:
                         st.warning("⚠️ Looks like a subscribe/screenshot/email funnel — this pattern cost real reach on this page. Consider dropping it from the caption.")
+                    fb_hashtags = fb_data.get("hashtags", [])
+                    bad_hashtags = check_hashtags_for_subscribe_push(fb_hashtags)
                     st.markdown("**Hashtags (aim for ~5, not 15-20):**")
-                    st.code(" ".join(f"#{h.lstrip('#')}" for h in fb_data.get("hashtags", [])), language="text")
+                    st.code(" ".join(f"#{h.lstrip('#')}" for h in fb_hashtags), language="text")
+                    if bad_hashtags:
+                        st.warning(f"⚠️ {', '.join(bad_hashtags)} — this is the same off-platform-push pattern that cost reach in the caption body, just in hashtag form. Swap for a topical hashtag instead.")
                     st.info(f"**Link placement:** {fb_data.get('link_placement_note', 'Put any link in the first comment, not the caption.')}")
 
                 st.markdown("---")
@@ -1303,16 +1320,19 @@ if run_analysis or seo_only:
                 if st.button("📊 Analyze My Caption", use_container_width=True, key="analyze_fb_caption_btn"):
                     if pasted_fb_caption.strip():
                         pcheck = validate_facebook_caption(pasted_fb_caption)
+                        pasted_hashtags = re.findall(r"#\w+", pasted_fb_caption)
+                        bad_pasted_hashtags = check_hashtags_for_subscribe_push(pasted_hashtags)
                         flags = []
                         if pcheck["over_limit"]: flags.append("⚠️ over 150 chars")
                         if pcheck["has_link"]: flags.append("🔗 has link (reach penalty)")
                         if pcheck["has_funnel_cta"]: flags.append("⚠️ funnel CTA (reach penalty)")
+                        if bad_pasted_hashtags: flags.append(f"⚠️ subscribe-push hashtag(s): {', '.join(bad_pasted_hashtags)} (same reach penalty, hashtag form)")
                         st.metric("Length", f"{pcheck['length']} chars")
                         st.metric("Hashtags", pcheck["hashtag_count"])
                         if flags:
                             for f in flags: st.warning(f)
                         else:
-                            st.success("✅ Matches this page's winning pattern — short, no link, no funnel CTA.")
+                            st.success("✅ Matches this page's winning pattern — short, no link, no funnel CTA, no subscribe-push hashtags.")
                     else:
                         st.warning("Paste a caption first.")
 
