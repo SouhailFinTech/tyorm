@@ -740,7 +740,7 @@ def generate_facebook_caption(topic, transcript):
 
 You are writing a Facebook Reel caption for a quant/algo-trading page. Topic: {topic}. Source content: "{transcript[:1200] if transcript else 'Topic: ' + topic}".
 
-TASK: Write ONE caption strictly following the rules above. If a link would normally be relevant, do NOT put it in the caption — instead note it should go in the first comment. Hashtags must be topical/content-related only (e.g. #AlgoTrading, #QuantFinance) — NEVER a subscribe/follow-push hashtag like #SubscribeNow or #FollowMe. That's the same off-platform-push pattern that cost this page real reach, just moved into a hashtag instead of the caption body.
+TASK: Write ONE caption strictly following the rules above. STAT SELECTION: the source may contain several numbers — scan all of them and prefer a POSITIVE BEFORE/AFTER TRANSFORMATION (e.g. "41% to 58% win rate", a specific improvement) over a standalone negative/failure stat (e.g. "9/10 lost money") when both are present. A transformation stat is what actually won on this page before; a lone negative stat without the fix attached reads as discouraging, not compelling. If a link would normally be relevant, do NOT put it in the caption — instead note it should go in the first comment. Hashtags must be topical/content-related only (e.g. #AlgoTrading, #QuantFinance) — NEVER a subscribe/follow-push hashtag like #SubscribeNow or #FollowMe. That's the same off-platform-push pattern that cost this page real reach, just moved into a hashtag instead of the caption body.
 
 Output STRICT JSON: "caption" (string, under 150 chars), "hashtags" (array of 5 strings, topical only, no subscribe/follow-push hashtags), "link_placement_note" (string, e.g. "Put your video/product link in the first comment, not here")"""
     try:
@@ -976,7 +976,7 @@ Topic: {topic}
 {kw_note}
 {face_instruction}
 
-TASK: Generate 3 title candidates, ALL strictly following the rules above — pull the specific number/outcome/phrase from the actual script content, don't invent one. For each, note whether it naturally contains one of the given search phrases. Then write a thumbnail brief for the strongest candidate.
+TASK: Generate 3 title candidates, ALL strictly following the rules above — pull the specific number/outcome/phrase from the actual script content, don't invent one. STAT SELECTION: if the script contains several numbers, prefer a positive before/after transformation (e.g. "41% to 58%") over a standalone negative/failure stat when both are present — a transformation is what's actually won on this channel before; a lone negative number reads as discouraging, not compelling. For each title, note whether it naturally contains one of the given search phrases. Then write a thumbnail brief for the strongest candidate.
 
 Output STRICT JSON: "titles" (array of 3 objects, each with "title" (string), "contains_search_phrase" (bool), "matched_phrase" (string or null)), "thumbnail_text" (string, max 5 words), "layout" (string), "midjourney_prompt" (string, detailed), "why_this_works" (string, 1-2 sentences tying it to this channel's own real performance pattern)"""
     try:
@@ -1190,9 +1190,20 @@ if run_analysis or seo_only:
         with st.spinner("Processing..."):
             thumb_path = None; transcript = ""; timed_transcript = None
             if url_input:
-                thumb_path, transcript, url_error = fetch_thumbnail_and_transcript(url_input)
-                if url_error: st.error(url_error)
-                timed_transcript = fetch_timed_transcript(url_input)
+                # Only attempt the YouTube-specific fetch if this actually looks like
+                # a YouTube URL. Previously this ran unconditionally, so pasting any
+                # other link (e.g. a Facebook post URL, valid for the Facebook Caption
+                # generator's optional source field) threw a scary "Invalid YouTube
+                # URL" error even though nothing was actually broken.
+                if "youtube.com" in url_input or "youtu.be" in url_input:
+                    thumb_path, transcript, url_error = fetch_thumbnail_and_transcript(url_input)
+                    if url_error: st.error(url_error)
+                    timed_transcript = fetch_timed_transcript(url_input)
+                elif not is_text_platform:
+                    st.error("That doesn't look like a YouTube URL.")
+                # else: text-platform mode with a non-YouTube URL (e.g. a Facebook
+                # link) — silently skipped, since the Script/Source box is the real
+                # source of content there and the URL field is optional.
             video_path = None
             if uploaded_file:
                 temp_dir = tempfile.gettempdir(); video_path = os.path.join(temp_dir, "uploaded_hook_video.mp4")
