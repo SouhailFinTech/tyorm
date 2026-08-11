@@ -1089,6 +1089,20 @@ if is_text_platform:
         topic_input = st.text_input("Main Topic/Keyword", placeholder="e.g., Bitcoin backtesting, Python algo")
     title_input = st.text_input("Post Topic", placeholder="e.g., Why EMA crossovers fail on BTC")
 
+    # NEW: proper source-content box for text platforms. Previously, generation with
+    # no URL fell back to just "Topic: " + title_input as the "transcript" — barely
+    # enough for the AI to pull a real number/result from, which is why generic hype
+    # copy (e.g. "5x Your Trading Edge") showed up instead of a real stat. This gives
+    # it actual source material to work from, same role the Script Compressor plays
+    # for long-form.
+    st.subheader("📝 Script / Source Content (optional but recommended)")
+    st.caption("Paste the script, outline, or key result of the post/video this content is for. Without this, generation has to guess at numbers instead of pulling a real one — that's what produced generic hype copy in earlier tests.")
+    text_platform_script_input = st.text_area(
+        "Paste your script, outline, or key result here...",
+        height=150,
+        placeholder="e.g. 'I backtested RSI mean-reversion on 4 years of BTC/USD data... Result: 58% win rate, profit factor 1.7...'"
+    )
+
     # Video/thumbnail-only inputs stay defined but empty/None so the shared processing
     # code below doesn't break — they're simply never shown or used in this mode.
     uploaded_file = None
@@ -1100,6 +1114,7 @@ if is_text_platform:
     niche_mode = "Technical (Algo/Coding/Tutorials)"  # unused for X/Threads scoring, kept for shared code path
     is_faceless = False
 else:
+    text_platform_script_input = ""  # not used outside text-platform mode, defined so downstream code path is safe
     st.subheader("📥 Inputs")
     col_url, col_upload = st.columns(2)
     with col_url: url_input = st.text_input("1. YouTube URL (For Original Thumb & Transcript)", placeholder="https://www.youtube.com/watch?v=...")
@@ -1189,6 +1204,15 @@ if run_analysis or seo_only:
 
         final_transcript = transcript
 
+        # Preferred source content for X/Threads/Facebook generation, in priority
+        # order: pasted script > fetched URL transcript > bare topic string (last
+        # resort — this is what produced generic hype copy in earlier tests, since
+        # there's no real content for the AI to pull a number/result from).
+        text_platform_source = (
+            text_platform_script_input.strip() if text_platform_script_input.strip()
+            else (final_transcript if final_transcript else "Topic: " + title_input)
+        )
+
         # === SCRIPT COMPRESSOR ===
         if full_script_input:
             st.markdown("---"); st.subheader("✂️ Script Pacing Compressor")
@@ -1234,7 +1258,7 @@ if run_analysis or seo_only:
             st.markdown("---")
             if is_x:
                 st.subheader("🐦 X (Twitter) Thread Generator")
-                with st.spinner("Drafting a viral quant thread..."): thread_data = generate_x_thread(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
+                with st.spinner("Drafting a viral quant thread..."): thread_data = generate_x_thread(topic_input, text_platform_source)
                 if "error" in thread_data: st.error(thread_data["error"])
                 else:
                     generated_tweets = [thread_data.get(f"tweet_{i}", "") for i in range(1, 7)]
@@ -1274,7 +1298,7 @@ if run_analysis or seo_only:
 
             elif is_threads:
                 st.subheader("🧵 Threads Post Generator")
-                with st.spinner("Drafting an aesthetic Threads post..."): threads_data = generate_threads_post(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
+                with st.spinner("Drafting an aesthetic Threads post..."): threads_data = generate_threads_post(topic_input, text_platform_source)
                 if "error" in threads_data: st.error(threads_data["error"])
                 else:
                     post_text = threads_data.get('post_text', '')
@@ -1290,7 +1314,7 @@ if run_analysis or seo_only:
                 st.subheader("📘 Facebook Reel Caption Generator (NEW)")
                 st.caption("Separate ruleset from X/Threads — built from this page's own 36-post export, not generic advice.")
                 with st.spinner("Drafting a caption from your page's own winning pattern..."):
-                    fb_data = generate_facebook_caption(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
+                    fb_data = generate_facebook_caption(topic_input, text_platform_source)
                 if "error" in fb_data: st.error(fb_data["error"])
                 else:
                     caption_text = fb_data.get("caption", "")
