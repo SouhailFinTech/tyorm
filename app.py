@@ -56,6 +56,16 @@ SHORTS_TITLE_RULES = """This channel has DATA-BACKED rules from its own real Sho
 2. The core phrase must mirror something people ACTUALLY search for on YouTube (e.g. "algo trading bot", "trading bot python", "auto trading bot") — not a niche/jargon term with low real search volume, even if it's topically correct. A title can rank 80%+ of its (tiny) traffic from Search and still flop if the underlying query itself has almost no volume — the phrase has to be one real people commonly type, not just a technically-relevant one.
 3. NEVER use a question mark (same rule as long-form, still holds for Shorts)."""
 
+# Facebook Reel captions follow a DIFFERENT winning pattern again — derived from this
+# page's own 36-post export, not assumed. The page had been cross-posting full
+# YouTube descriptions as captions, which measurably hurt reach.
+FACEBOOK_CAPTION_RULES = """This page has DATA-BACKED rules from its own real Facebook Reels performance — apply as HARD constraints:
+1. LENGTH: caption must be SHORT — under 150 characters, one punchy stat-led line. On this page, the two best-performing posts were both under 91 characters; posts over 200 characters (full YouTube-style descriptions) measurably underperformed.
+2. NEVER include a link in the caption body. Posts with a link averaged 29% fewer impressions than posts without one — Facebook suppresses reach on off-platform links. If a link is needed, it goes in the first comment, not the caption (say so explicitly in your output).
+3. NEVER include a multi-step off-platform funnel (e.g. "subscribe, screenshot, email me for X") in the caption. This measurably cost reach on this page (110 vs 153 avg impressions) — it reads as YouTube-native, not Facebook-native.
+4. Hashtags: use around 5, not 15-20. More hashtags showed no reach benefit on this page's real data.
+5. Style: lead with a concrete stat or result, similar to "X Reality Check: Y% [metric] Needed" — this pattern produced this page's two highest-reach posts."""
+
 
 # ---------------------------------------------------------------------------
 # PHASE 1: Calibration & History — closes the loop between predicted scores
@@ -696,6 +706,35 @@ def validate_threads_post_length(text, limit=500):
     length = len(text) if text else 0
     return {"length": length, "over_limit": length > limit}
 
+# === NEW: Facebook Reel Caption — deterministic validation + generation, separate
+# tag from X/Threads since this page's real data shows a different winning pattern
+# (short, link-free, funnel-free, stat-led) than either of those platforms. ===
+def validate_facebook_caption(caption, length_limit=150):
+    caption = caption or ""
+    return {
+        "length": len(caption),
+        "over_limit": len(caption) > length_limit,
+        "has_link": bool(re.search(r"https?://", caption)),
+        "has_funnel_cta": bool(re.search(r"screenshot|email me|gumroad|subscribe.{0,20}(email|screenshot|dm)", caption, re.IGNORECASE)),
+        "hashtag_count": caption.count("#"),
+    }
+
+def generate_facebook_caption(topic, transcript):
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key: return {"error": "No Groq API Key found."}
+    client = Groq(api_key=api_key)
+    prompt = f"""{FACEBOOK_CAPTION_RULES}
+
+You are writing a Facebook Reel caption for a quant/algo-trading page. Topic: {topic}. Source content: "{transcript[:1200] if transcript else 'Topic: ' + topic}".
+
+TASK: Write ONE caption strictly following the rules above. If a link would normally be relevant, do NOT put it in the caption — instead note it should go in the first comment.
+
+Output STRICT JSON: "caption" (string, under 150 chars), "hashtags" (array of 5 strings), "link_placement_note" (string, e.g. "Put your video/product link in the first comment, not here")"""
+    try:
+        completion = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.5, response_format={"type": "json_object"})
+        return json.loads(completion.choices[0].message.content)
+    except Exception as e: return {"error": str(e)}
+
 # === NEW: Thread Quality / Retention Analyzer (works on generated OR pasted-in threads) ===
 # X's algorithm rewards dwell time and reply engagement on a thread, not just the hook.
 # A thread that opens strong but loses the reader by tweet 3 gets throttled the same as
@@ -1011,11 +1050,12 @@ with st.sidebar:
         st.caption("No history yet — run an analysis and log it below, or import a Studio CSV.")
     st.caption("⚠️ Stored on the app's own server storage — not permanent on free hosting. Download periodically.")
 
-format_mode = st.radio("🎬 Content Format:", ["Long-form Video (8+ mins)", "YouTube Short (< 60s)", "X (Twitter) Thread", "Threads Post"], horizontal=True)
+format_mode = st.radio("🎬 Content Format:", ["Long-form Video (8+ mins)", "YouTube Short (< 60s)", "X (Twitter) Thread", "Threads Post", "Facebook Reel Caption"], horizontal=True)
 is_short = (format_mode == "YouTube Short (< 60s)")
 is_x = (format_mode == "X (Twitter) Thread")
 is_threads = (format_mode == "Threads Post")
-is_text_platform = is_x or is_threads
+is_facebook = (format_mode == "Facebook Reel Caption")
+is_text_platform = is_x or is_threads or is_facebook
 
 if is_short: st.info(" **Shorts Mode Active:** AI will enforce <150 words, <50 char titles, and >30 CPM pacing.")
 elif is_text_platform: st.info("📱 **Text Platform Active:** AI will optimize for dwell time, bookmarks, and replies.")
@@ -1233,9 +1273,53 @@ if run_analysis or seo_only:
                         st.error("⚠️ This post exceeds Threads' 500-character limit and will be rejected on posting.")
                     st.markdown("### ️ Visual Asset Idea"); st.info(threads_data.get('image_idea', 'N/A'))
 
-            st.markdown("---")
-            st.subheader("🎯 Optimize Your Own Draft (paste existing content)")
-            st.caption("Already have a thread or post written? Paste it here to get the same scoring the generator above gets — this works on your own drafts, not just AI-generated ones.")
+            elif is_facebook:
+                st.subheader("📘 Facebook Reel Caption Generator (NEW)")
+                st.caption("Separate ruleset from X/Threads — built from this page's own 36-post export, not generic advice.")
+                with st.spinner("Drafting a caption from your page's own winning pattern..."):
+                    fb_data = generate_facebook_caption(topic_input, final_transcript if final_transcript else "Topic: " + title_input)
+                if "error" in fb_data: st.error(fb_data["error"])
+                else:
+                    caption_text = fb_data.get("caption", "")
+                    check = validate_facebook_caption(caption_text)
+                    label = f"Caption — {check['length']}/150 chars"
+                    if check["over_limit"]: label += "  ⚠️ OVER LIMIT"
+                    if check["has_link"]: label += "  🔗 has link"
+                    if check["has_funnel_cta"]: label += "  ⚠️ funnel CTA detected"
+                    st.markdown("### 📝 Your Caption"); st.text_area(label, value=caption_text, height=80)
+                    if check["over_limit"]:
+                        st.error("⚠️ Over 150 chars — this page's top posts were all under 91 chars. Trim it.")
+                    if check["has_link"]:
+                        st.error("🔗 Contains a link — this measurably cost 29% reach on this page's real data. Move it to the first comment.")
+                    if check["has_funnel_cta"]:
+                        st.warning("⚠️ Looks like a subscribe/screenshot/email funnel — this pattern cost real reach on this page. Consider dropping it from the caption.")
+                    st.markdown("**Hashtags (aim for ~5, not 15-20):**")
+                    st.code(" ".join(f"#{h.lstrip('#')}" for h in fb_data.get("hashtags", [])), language="text")
+                    st.info(f"**Link placement:** {fb_data.get('link_placement_note', 'Put any link in the first comment, not the caption.')}")
+
+                st.markdown("---")
+                st.subheader("🎯 Optimize Your Own Draft (paste existing caption)")
+                pasted_fb_caption = st.text_area("Paste your existing Facebook caption...", height=100, key="pasted_fb_caption")
+                if st.button("📊 Analyze My Caption", use_container_width=True, key="analyze_fb_caption_btn"):
+                    if pasted_fb_caption.strip():
+                        pcheck = validate_facebook_caption(pasted_fb_caption)
+                        flags = []
+                        if pcheck["over_limit"]: flags.append("⚠️ over 150 chars")
+                        if pcheck["has_link"]: flags.append("🔗 has link (reach penalty)")
+                        if pcheck["has_funnel_cta"]: flags.append("⚠️ funnel CTA (reach penalty)")
+                        st.metric("Length", f"{pcheck['length']} chars")
+                        st.metric("Hashtags", pcheck["hashtag_count"])
+                        if flags:
+                            for f in flags: st.warning(f)
+                        else:
+                            st.success("✅ Matches this page's winning pattern — short, no link, no funnel CTA.")
+                    else:
+                        st.warning("Paste a caption first.")
+
+            if not is_facebook:
+                st.markdown("---")
+                st.subheader("🎯 Optimize Your Own Draft (paste existing content)")
+                st.caption("Already have a thread or post written? Paste it here to get the same scoring the generator above gets — this works on your own drafts, not just AI-generated ones.")
             if is_x:
                 pasted_thread = st.text_area(
                     "Paste your thread, one tweet per line...",
