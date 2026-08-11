@@ -64,7 +64,8 @@ FACEBOOK_CAPTION_RULES = """This page has DATA-BACKED rules from its own real Fa
 2. NEVER include a link in the caption body. Posts with a link averaged 29% fewer impressions than posts without one — Facebook suppresses reach on off-platform links. If a link is needed, it goes in the first comment, not the caption (say so explicitly in your output).
 3. NEVER include a multi-step off-platform funnel (e.g. "subscribe, screenshot, email me for X") in the caption. This measurably cost reach on this page (110 vs 153 avg impressions) — it reads as YouTube-native, not Facebook-native.
 4. Hashtags: use around 5, not 15-20. More hashtags showed no reach benefit on this page's real data.
-5. Style: lead with a concrete stat or result, similar to "X Reality Check: Y% [metric] Needed" — this pattern produced this page's two highest-reach posts."""
+5. STRUCTURE (required): a bare stat alone isn't enough — pair it with a short stakes-setting frame so the reader knows why the number matters, not just what it is. Shape: "[Frame] [Stat]." e.g. "RSI Reality Check: 41% → 58% Win Rate" or "Trend Following Reality Check: 40% WR Needed" (this page's actual top post). A stat with no frame (e.g. just "41% to 58% win rate boost") is a weaker, less complete output than one with a frame attached — always attach one.
+6. When a before/after transformation stat is available (e.g. "41% to 58%"), always prefer it over a standalone/negative stat (e.g. "9/10 lost money") — a transformation is what actually won on this page; a lone negative number reads as discouraging, not compelling."""
 
 
 # ---------------------------------------------------------------------------
